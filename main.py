@@ -9,8 +9,10 @@ from core import BedrockClient
 from utils import (
     print_header, print_section, print_success, print_error,
     print_warning, print_info, print_models, print_response,
-    execute_command, ask_confirmation, validate_command
+    execute_command, ask_confirmation, validate_command,
+    ModelSelector, UsageTracker, TableFormatter, Colors
 )
+from commands.parser import SlashCommandParser, CommandRegistry
 
 
 class CodeAssistantCLI:
@@ -21,6 +23,9 @@ class CodeAssistantCLI:
         try:
             self.config = get_config()
             self.bedrock = BedrockClient(self.config)
+            self.usage_tracker = UsageTracker()
+            self.command_registry = CommandRegistry()
+            self._register_commands()
             print_success("Connected to AWS Bedrock")
         except ConfigError as e:
             print_error(str(e))
@@ -29,93 +34,123 @@ class CodeAssistantCLI:
             print_error(f"Failed to initialize: {str(e)}")
             sys.exit(1)
     
-    def cmd_ask(self, args):
-        """Ask the AI a question"""
-        if not args.question:
-            print_error("Question required")
+    def _register_commands(self):
+        """Register slash commands"""
+        self.command_registry.register('ask', self._cmd_ask)
+        self.command_registry.register('analyze', self._cmd_analyze)
+        self.command_registry.register('exec', self._cmd_exec)
+        self.command_registry.register('models', self._cmd_list_models)
+        self.command_registry.register('select', self._cmd_select_model)
+        self.command_registry.register('help', self._cmd_help)
+        self.command_registry.register('usage', self._cmd_usage)
+        self.command_registry.register('exit', self._cmd_exit)
+    
+    def _cmd_ask(self, args: str):
+        """Handle /ask command"""
+        if not args:
+            print_error("Please provide a question: /ask <question>")
             return
         
         try:
-            model = self.config.bedrock.get('default_model', 
-                                          'anthropic.claude-opus-4-5-20251101-v1:0')
-            print_info(f"Asking {model}...")
+            model_id = self.config.bedrock.get('default_model', 
+                                              'anthropic.claude-opus-4-5-20251101-v1:0')
+            print_info(f"Asking {model_id}...")
             
-            response = self.bedrock.invoke_model(model, args.question)
-            print_response("Response:", response, model)
+            response = self.bedrock.invoke_model(model_id, args)
+            print_response("Response:", response, model_id)
+            self.usage_tracker.increment_request()
         
         except Exception as e:
             print_error(f"Failed to get response: {str(e)}")
     
-    def cmd_list_models(self, args):
-        """List available models"""
-        try:
-            models = self.bedrock.list_models()
-            print_models(models)
-        except Exception as e:
-            print_error(f"Failed to list models: {str(e)}")
+    def _cmd_analyze(self, args: str):
+        """Handle /analyze command"""
+        print_info("Analyze feature coming soon!")
     
-    def cmd_exec(self, args):
-        """Execute a shell command"""
-        if not args.command:
-            print_error("Command required")
+    def _cmd_exec(self, args: str):
+        """Handle /exec command"""
+        if not args:
+            print_error("Please provide a command: /exec <command>")
             return
         
-        if not validate_command(args.command):
+        if not validate_command(args):
             return
         
-        success, output = execute_command(
-            args.command,
-            ask_before_execute=True
-        )
+        success, output = execute_command(args, ask_before_execute=True)
         
         if success and output:
             print_section("Command Output:")
             print(output)
     
+    def _cmd_list_models(self, args: str):
+        """Handle /models command"""
+        try:
+            models = self.bedrock.list_models()
+            
+            # Format as table
+            table = TableFormatter.format_models_table(models)
+            print_section("Available Models:")
+            print(table)
+        except Exception as e:
+            print_error(f"Failed to list models: {str(e)}")
+    
+    def _cmd_select_model(self, args: str):
+        """Handle /select command - interactive model selection"""
+        try:
+            models = self.bedrock.list_models()
+            selector = ModelSelector(models)
+            
+            # Show provider selection first
+            provider, provider_models = selector.select_provider()
+            
+            # Then show model selection with formatted list
+            selected = selector.select_model(provider)
+            
+            print_success(f"Selected: {selected['modelName']}")
+            print_info(f"Model ID: {selected['modelId']}")
+        
+        except Exception as e:
+            print_error(f"Model selection failed: {str(e)}")
+    
+    def _cmd_help(self, args: str):
+        """Handle /help command"""
+        help_text = SlashCommandParser.get_help_text()
+        print_section("Available Slash Commands:", help_text)
+    
+    def _cmd_usage(self, args: str):
+        """Handle /usage command"""
+        self.usage_tracker.display_usage_right_panel()
+    
+    def _cmd_exit(self, args: str):
+        """Handle /exit command"""
+        print_success("Goodbye!")
+        sys.exit(0)
+    
+    
     def interactive(self):
         """Start interactive mode"""
         print_header("AWS Bedrock Code Assistant")
-        print_info("Type 'help' for commands, 'exit' to quit\n")
+        print_info("Type '/help' for commands, '/exit' to quit\n")
         
         while True:
             try:
-                user_input = input("> ").strip()
+                user_input = input(f"{Colors.BOLD}{Colors.GREEN}>> {Colors.END}").strip()
                 
                 if not user_input:
                     continue
-                elif user_input.lower() == 'exit':
-                    print_success("Goodbye!")
-                    break
-                elif user_input.lower() == 'help':
-                    self._print_help()
-                elif user_input.lower().startswith('ask '):
-                    question = user_input[4:].strip()
-                    if question:
-                        class Args:
-                            pass
-                        args = Args()
-                        args.question = question
-                        self.cmd_ask(args)
-                elif user_input.lower() == 'models':
-                    class Args:
-                        pass
-                    args = Args()
-                    self.cmd_list_models(args)
-                elif user_input.lower().startswith('exec '):
-                    command = user_input[5:].strip()
-                    if command:
-                        class Args:
-                            pass
-                        args = Args()
-                        args.command = command
-                        self.cmd_exec(args)
+                
+                # Check for slash command
+                if SlashCommandParser.is_slash_command(user_input):
+                    command, arguments = SlashCommandParser.parse_command(user_input)
+                    
+                    if not SlashCommandParser.validate_command(command):
+                        print_error(f"Unknown command: /{command}")
+                        continue
+                    
+                    self.command_registry.handle(command, arguments)
                 else:
-                    # Default: ask AI
-                    class Args:
-                        pass
-                    args = Args()
-                    args.question = user_input
-                    self.cmd_ask(args)
+                    # Default: treat as question for AI
+                    self._cmd_ask(user_input)
             
             except KeyboardInterrupt:
                 print("\n")
@@ -124,18 +159,6 @@ class CodeAssistantCLI:
                     break
             except Exception as e:
                 print_error(f"Error: {str(e)}")
-    
-    def _print_help(self):
-        """Print help information"""
-        help_text = """
-Available Commands:
-  ask <question>    - Ask the AI a question
-  models           - List available Bedrock models
-  exec <command>   - Execute a shell command (with confirmation)
-  help             - Show this help
-  exit             - Exit the assistant
-        """
-        print_section("Help", help_text.strip())
 
 
 def main():
@@ -145,10 +168,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                         # Start interactive mode
-  %(prog)s ask "What is Python?"   # Ask a question
-  %(prog)s list-models             # List available models
-  %(prog)s exec "ls -la"           # Execute a command
+  %(prog)s                           # Start interactive mode
+  %(prog)s ask "What is Python?"     # Ask a question
+  %(prog)s select                    # Interactive model selection
+  %(prog)s models                    # List all models
+  %(prog)s exec "ls -la"             # Execute a command
+
+Slash Commands (in interactive mode):
+  /ask <question>    - Ask the AI a question
+  /select            - Interactive model selection
+  /models            - List available models
+  /exec <command>    - Execute a shell command
+  /usage             - Show API usage limits
+  /help              - Show help information
+  /exit              - Exit the assistant
         """
     )
     
@@ -158,8 +191,11 @@ Examples:
     ask_parser = subparsers.add_parser('ask', help='Ask the AI')
     ask_parser.add_argument('question', help='Question to ask')
     
-    # list-models command
-    subparsers.add_parser('list-models', help='List available models')
+    # select command
+    subparsers.add_parser('select', help='Interactive model selection')
+    
+    # models command
+    subparsers.add_parser('models', help='List available models')
     
     # exec command
     exec_parser = subparsers.add_parser('exec', help='Execute a command')
@@ -170,11 +206,15 @@ Examples:
     cli = CodeAssistantCLI()
     
     if args.command == 'ask':
-        cli.cmd_ask(args)
-    elif args.command == 'list-models':
-        cli.cmd_list_models(args)
+        class AskArgs:
+            question = args.question
+        cli._cmd_ask(args.question)
+    elif args.command == 'select':
+        cli._cmd_select_model('')
+    elif args.command == 'models':
+        cli._cmd_list_models('')
     elif args.command == 'exec':
-        cli.cmd_exec(args)
+        cli._cmd_exec(args.command)
     else:
         # Start interactive mode if no command
         cli.interactive()
