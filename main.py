@@ -62,7 +62,18 @@ class CodeAssistantCLI:
             self.usage_tracker.increment_request()
         
         except Exception as e:
-            print_error(f"Failed to get response: {str(e)}")
+            error_msg = str(e)
+            
+            # Handle on-demand throughput not supported
+            if "on-demand throughput" in error_msg.lower() and "supported" in error_msg.lower():
+                print_warning("This model requires Provisioned Throughput.")
+                print()
+                print_info("Solutions:")
+                print("  1. Use /select to try another model")
+                print("  2. Set up Provisioned Throughput in AWS Console")
+                print("     → Bedrock → Provisioned Throughput → Create")
+            else:
+                print_error(f"Failed to get response: {error_msg}")
     
     def _cmd_analyze(self, args: str):
         """Handle /analyze command"""
