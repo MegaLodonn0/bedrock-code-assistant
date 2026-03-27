@@ -5,6 +5,12 @@ config.json          # Local config with API keys - DO NOT COMMIT
 *.key                # Private keys
 *.pem                # SSL certificates
 
+# Conversation and Session files
+conversation_*.json  # Saved conversation sessions
+session_*.json       # Session files
+chat_history/        # Chat history directory
+*.session            # Session files
+
 # Python
 __pycache__/
 *.py[cod]
