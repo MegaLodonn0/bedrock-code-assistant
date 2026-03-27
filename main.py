@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+import os
 from pathlib import Path
 
 from config import get_config, ConfigError
@@ -10,7 +11,7 @@ from utils import (
     print_header, print_section, print_success, print_error,
     print_warning, print_info, print_models, print_response,
     execute_command, ask_confirmation, validate_command,
-    ModelSelector, UsageTracker, TableFormatter, Colors
+    ProviderScreen, UsageTracker, TableFormatter, Colors
 )
 from commands.parser import SlashCommandParser, CommandRegistry
 
@@ -23,7 +24,7 @@ class CodeAssistantCLI:
         try:
             self.config = get_config()
             self.bedrock = BedrockClient(self.config)
-            self.usage_tracker = UsageTracker()
+            self.usage_tracker = UsageTracker(self.bedrock)  # Pass bedrock_client
             self.command_registry = CommandRegistry()
             self._register_commands()
             print_success("Connected to AWS Bedrock")
@@ -95,22 +96,30 @@ class CodeAssistantCLI:
             print_error(f"Failed to list models: {str(e)}")
     
     def _cmd_select_model(self, args: str):
-        """Handle /select command - interactive model selection"""
+        """Handle /select command - full-screen provider selection"""
         try:
             models = self.bedrock.list_models()
-            selector = ModelSelector(models)
+            screen = ProviderScreen(models)
             
-            # Show provider selection first
-            provider, provider_models = selector.select_provider()
+            # Step 1: Provider selection
+            provider, provider_models = screen.show_provider_selection()
             
-            # Then show model selection with formatted list
-            selected = selector.select_model(provider)
+            # Step 2: Model selection for selected provider
+            selected = screen.show_models_for_provider(provider, provider_models)
             
-            print_success(f"Selected: {selected['modelName']}")
-            print_info(f"Model ID: {selected['modelId']}")
+            # Display confirmation
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print()
+            print_success(f"Selected Model:")
+            print(f"  {Colors.GREEN}Name: {selected['modelName']}{Colors.END}")
+            print(f"  {Colors.GREEN}ID: {selected['modelId']}{Colors.END}")
+            print(f"  {Colors.GREEN}Provider: {selected['providerName']}{Colors.END}")
+            print()
+            input("Press Enter to continue...")
         
         except Exception as e:
             print_error(f"Model selection failed: {str(e)}")
+            input("Press Enter to continue...")
     
     def _cmd_help(self, args: str):
         """Handle /help command"""
