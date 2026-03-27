@@ -1,3 +1,6 @@
 """Commands package"""
 
-__all__ = []
+from .parser import SlashCommandParser, CommandRegistry
+
+__all__ = ['SlashCommandParser', 'CommandRegistry']
+
