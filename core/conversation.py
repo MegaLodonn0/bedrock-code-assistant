@@ -117,7 +117,7 @@ class ConversationManager:
     
     def compress_history(self) -> str:
         """
-        Compress conversation by summarizing older messages
+        Compress conversation by creating a summary of older messages
         
         Returns:
             Summary text
@@ -129,15 +129,35 @@ class ConversationManager:
         recent = self.history[-5:]
         older = self.history[:-5]
         
-        summary_lines = [
-            f"[SUMMARY] {len(older)} older messages archived",
-            f"- Total tokens compressed: {sum(m.get('tokens', 0) for m in older)}"
-        ]
+        # Calculate compression stats
+        older_token_count = sum(m.get('tokens', 0) for m in older)
         
-        # Add a summary marker to history
-        self.history = recent
+        # Create a summary message that preserves context
+        summary_message = {
+            'timestamp': datetime.now().isoformat(),
+            'role': 'system',
+            'content': f'[ARCHIVED] {len(older)} previous messages compressed. Topics covered: {self._extract_summary(older)}',
+            'model': 'compression',
+            'tokens': 0,
+            'archived_count': len(older),
+            'archived_tokens': older_token_count
+        }
         
-        return "\n".join(summary_lines) + f"\nRetained {len(recent)} most recent messages."
+        # Replace history with summary + recent messages
+        self.history = [summary_message] + recent
+        
+        return (f"✅ Compressed {len(older)} messages ({older_token_count} tokens)\n"
+                f"📊 New history size: {len(self.history)} messages\n"
+                f"💾 Summary preserved in conversation")
+    
+    def _extract_summary(self, messages: List[Dict[str, Any]]) -> str:
+        """Extract brief summary of message topics"""
+        topics = []
+        for msg in messages[-3:]:  # Last 3 messages for context
+            content = msg.get('content', '')[:50]  # First 50 chars
+            if content:
+                topics.append(content)
+        return '; '.join(topics) if topics else 'general discussion'
     
     def clear_history(self):
         """Clear conversation history"""

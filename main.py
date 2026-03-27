@@ -11,8 +11,9 @@ from core.conversation import ConversationManager
 from utils import (
     print_header, print_section, print_success, print_error,
     print_warning, print_info, print_models, print_response,
+    print_checkmark, print_check,
     execute_command, ask_confirmation, validate_command,
-    ProviderScreen, UsageTracker, TableFormatter, Colors, FileReader
+    ProviderScreen, UsageTracker, TableFormatter, Colors, FileReader, AutoCompleter
 )
 from commands.parser import SlashCommandParser, CommandRegistry
 
@@ -30,7 +31,11 @@ class CodeAssistantCLI:
             self.selected_model = None  # Track user-selected model
             self.conversation = ConversationManager()  # Track conversation history
             self._register_commands()
-            print_success("Connected to AWS Bedrock")
+            
+            # Setup autocomplete for commands
+            AutoCompleter.enable_autocomplete(list(SlashCommandParser.SLASH_COMMANDS.keys()))
+            
+            print_success("Connected to AWS Bedrock", checkmark=True)
         except ConfigError as e:
             print_error(str(e))
             sys.exit(1)
@@ -196,7 +201,7 @@ Please provide:
             success, message = self.conversation.save_conversation(args)
             
             if success:
-                print_success(message)
+                print_checkmark(message)
             else:
                 print_error(message)
         
@@ -213,7 +218,7 @@ Please provide:
             success, message = self.conversation.load_conversation(args)
             
             if success:
-                print_success(message)
+                print_checkmark(message)
                 # Display context from loaded conversation
                 print_section("Recent Messages:")
                 print(self.conversation.get_context(last_n=3))
@@ -259,10 +264,10 @@ Please provide:
             # Step 2: Model selection for selected provider
             selected = screen.show_models_for_provider(provider, provider_models)
             
-            # Display confirmation with usage limits
+            # Display confirmation with usage limits and checkmark
             os.system('cls' if os.name == 'nt' else 'clear')
             print()
-            print_success(f"Selected Model:")
+            print_checkmark("Model Information:")
             print(f"  {Colors.GREEN}Name: {selected['modelName']}{Colors.END}")
             print(f"  {Colors.GREEN}ID: {selected['modelId']}{Colors.END}")
             print(f"  {Colors.GREEN}Provider: {selected['providerName']}{Colors.END}")
@@ -292,15 +297,15 @@ Please provide:
             # Save selected model
             self.selected_model = selected
             
-            # Display confirmation
+            # Display confirmation with checkmark
             os.system('cls' if os.name == 'nt' else 'clear')
             print()
-            print_success(f"Selected Model:")
+            print_checkmark("Model Selected:")
             print(f"  {Colors.GREEN}Name: {selected['modelName']}{Colors.END}")
             print(f"  {Colors.GREEN}ID: {selected['modelId']}{Colors.END}")
             print(f"  {Colors.GREEN}Provider: {selected['providerName']}{Colors.END}")
             print()
-            print_info("This model is now active for /ask commands")
+            print_check("This model is now active for /ask commands")
             print()
             input("Press Enter to continue...")
         

@@ -32,9 +32,20 @@ def print_section(title: str, content: str = None):
         print(content)
 
 
-def print_success(text: str):
+def print_success(text: str, checkmark: bool = False):
     """Print success message"""
-    print(f"{Colors.GREEN}[OK] {text}{Colors.END}")
+    marker = "✅" if checkmark else "[OK]"
+    print(f"{Colors.GREEN}{marker} {text}{Colors.END}")
+
+
+def print_checkmark(text: str):
+    """Print message with checkmark"""
+    print(f"{Colors.GREEN}✅ {text}{Colors.END}")
+
+
+def print_check(text: str):
+    """Print message with simple checkmark"""
+    print(f"{Colors.GREEN}✓ {text}{Colors.END}")
 
 
 def print_error(text: str):
