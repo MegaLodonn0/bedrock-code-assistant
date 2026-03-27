@@ -80,6 +80,7 @@ class BedrockClient:
             max_tokens = kwargs.get('max_tokens', bedrock_config.get('max_tokens', 2048))
             temperature = kwargs.get('temperature', bedrock_config.get('temperature', 0.7))
             
+            # Claude (Anthropic) format
             if 'claude' in model_id:
                 request_body = {
                     "anthropic_version": "bedrock-2023-06-01",
@@ -92,6 +93,21 @@ class BedrockClient:
                         }
                     ]
                 }
+            # Amazon Nova format (minimal - only messages required)
+            elif 'nova' in model_id:
+                request_body = {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "text": prompt
+                                }
+                            ]
+                        }
+                    ]
+                }
+            # Default format (for other models like Llama, Mistral, etc.)
             else:
                 request_body = {
                     "prompt": prompt,
@@ -106,13 +122,22 @@ class BedrockClient:
             
             response_body = json.loads(response['body'].read())
             
+            # Parse response based on model type
             if 'claude' in model_id:
                 return response_body['content'][0]['text']
+            elif 'nova' in model_id:
+                return response_body.get('content')[0]['text']
             else:
                 return response_body.get('completion', response_body.get('text', ''))
         
         except ClientError as e:
-            raise RuntimeError(f"Model invocation failed: {e.response['Error']['Message']}")
+            error_msg = e.response['Error']['Message']
+            
+            # Handle specific model errors
+            if 'Model not found' in error_msg or 'not found' in error_msg:
+                raise RuntimeError(f"Model invocation failed: This model variant is not available. Try another model.")
+            else:
+                raise RuntimeError(f"Model invocation failed: {error_msg}")
         except BotoCoreError as e:
             raise RuntimeError(f"AWS error: {str(e)}")
     
