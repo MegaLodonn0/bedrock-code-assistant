@@ -26,6 +26,7 @@ class CodeAssistantCLI:
             self.bedrock = BedrockClient(self.config)
             self.usage_tracker = UsageTracker(self.bedrock)  # Pass bedrock_client
             self.command_registry = CommandRegistry()
+            self.selected_model = None  # Track user-selected model
             self._register_commands()
             print_success("Connected to AWS Bedrock")
         except ConfigError as e:
@@ -53,9 +54,16 @@ class CodeAssistantCLI:
             return
         
         try:
-            model_id = self.config.bedrock.get('default_model', 
-                                              'anthropic.claude-opus-4-5-20251101-v1:0')
-            print_info(f"Asking {model_id}...")
+            # Use selected model if available, otherwise use default
+            if self.selected_model:
+                model_id = self.selected_model['modelId']
+                model_name = self.selected_model['modelName']
+            else:
+                model_id = self.config.bedrock.get('default_model', 
+                                                   'anthropic.claude-opus-4-5-20251101-v1:0')
+                model_name = "Default"
+            
+            print_info(f"Asking {model_name} ({model_id})...")
             
             response = self.bedrock.invoke_model(model_id, args)
             print_response("Response:", response, model_id)
@@ -136,6 +144,9 @@ class CodeAssistantCLI:
             # Step 2: Model selection for selected provider
             selected = screen.show_models_for_provider(provider, provider_models)
             
+            # Save selected model
+            self.selected_model = selected
+            
             # Display confirmation
             os.system('cls' if os.name == 'nt' else 'clear')
             print()
@@ -143,6 +154,8 @@ class CodeAssistantCLI:
             print(f"  {Colors.GREEN}Name: {selected['modelName']}{Colors.END}")
             print(f"  {Colors.GREEN}ID: {selected['modelId']}{Colors.END}")
             print(f"  {Colors.GREEN}Provider: {selected['providerName']}{Colors.END}")
+            print()
+            print_info("This model is now active for /ask commands")
             print()
             input("Press Enter to continue...")
         
