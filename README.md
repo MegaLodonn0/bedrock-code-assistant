@@ -1,8 +1,8 @@
-# AWS Bedrock Code Assistant
+# Bedrock Code Assistant
 
-An interactive, terminal-based code assistant powered by AWS Bedrock with support for multiple AI models.
+**An interactive AI-powered code assistant for the terminal, leveraging AWS Bedrock to provide intelligent coding support with command execution, file analysis, and real-time assistance.**
 
-## Features
+---
 
 - 🤖 **AI-Powered Code Assistance** - Ask questions and get instant responses from AWS Bedrock models
 - 💬 **Interactive Mode** - Conversational interface with command support
