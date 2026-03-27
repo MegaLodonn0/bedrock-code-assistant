@@ -126,7 +126,7 @@ class BedrockClient:
             if 'claude' in model_id:
                 return response_body['content'][0]['text']
             elif 'nova' in model_id:
-                return response_body.get('content')[0]['text']
+                return response_body['output']['message']['content'][0]['text']
             else:
                 return response_body.get('completion', response_body.get('text', ''))
         
