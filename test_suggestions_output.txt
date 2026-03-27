@@ -1,0 +1,1 @@
+[ERROR] Failed to initialize: 'charmap' codec can't encode character '\u2705' in position 5: character maps to <undefined>

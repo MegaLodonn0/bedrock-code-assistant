@@ -3,6 +3,7 @@
 from typing import List, Dict, Tuple, Optional
 import os
 from utils.output import Colors
+from utils.keyboard import NavigationMenu, KeyboardInput
 
 
 class ProviderScreen:
@@ -26,33 +27,37 @@ class ProviderScreen:
     
     def show_provider_selection(self) -> Tuple[str, List[Dict]]:
         """
-        Display full-screen provider selection menu.
+        Display full-screen provider selection menu with arrow keys.
         
         Returns:
             Tuple of (provider_name, provider_models)
         """
-        while True:
-            self._clear_screen()
-            self._draw_provider_list()
-            
-            try:
-                provider_list = list(self.providers.keys())
-                choice = input(f"\n{Colors.YELLOW}Select Provider (1-{len(provider_list)}): {Colors.END}").strip()
-                
-                idx = int(choice) - 1
-                if 0 <= idx < len(provider_list):
-                    provider = provider_list[idx]
-                    return provider, self.providers[provider]
-                else:
-                    print(f"{Colors.RED}Invalid selection!{Colors.END}")
-                    input("Press Enter to continue...")
-            except ValueError:
-                print(f"{Colors.RED}Please enter a valid number!{Colors.END}")
-                input("Press Enter to continue...")
+        provider_list = list(self.providers.keys())
+        
+        # Create menu items with info
+        menu_items = [
+            f"{provider:<30} ({len(self.providers[provider])} models)"
+            for provider in provider_list
+        ]
+        
+        # Use navigation menu
+        menu = NavigationMenu(
+            menu_items,
+            title="AWS BEDROCK - SELECT PROVIDER"
+        )
+        
+        selected_idx = menu.display()
+        
+        if selected_idx == -1:
+            # User cancelled
+            return None, None
+        
+        provider = provider_list[selected_idx]
+        return provider, self.providers[provider]
     
     def show_models_for_provider(self, provider: str, models: List[Dict]) -> Dict:
         """
-        Display full-screen model selection for a specific provider.
+        Display full-screen model selection for a specific provider with arrow keys.
         
         Args:
             provider: Provider name
@@ -61,23 +66,25 @@ class ProviderScreen:
         Returns:
             Selected model dictionary
         """
-        while True:
-            self._clear_screen()
-            self._draw_provider_header(provider, len(models))
-            self._draw_model_list(models)
-            
-            try:
-                choice = input(f"\n{Colors.YELLOW}Select Model (1-{len(models)}): {Colors.END}").strip()
-                
-                idx = int(choice) - 1
-                if 0 <= idx < len(models):
-                    return models[idx]
-                else:
-                    print(f"{Colors.RED}Invalid selection!{Colors.END}")
-                    input("Press Enter to continue...")
-            except ValueError:
-                print(f"{Colors.RED}Please enter a valid number!{Colors.END}")
-                input("Press Enter to continue...")
+        # Create menu items
+        menu_items = [
+            f"{model.get('modelName', 'Unknown'):<40} (ID: {model.get('modelId', 'N/A')})"
+            for model in models
+        ]
+        
+        # Use navigation menu
+        menu = NavigationMenu(
+            menu_items,
+            title=f"AWS BEDROCK - SELECT MODEL FROM {provider.upper()}"
+        )
+        
+        selected_idx = menu.display()
+        
+        if selected_idx == -1:
+            # User cancelled
+            return None
+        
+        return models[selected_idx]
     
     def _clear_screen(self):
         """Clear terminal screen"""
