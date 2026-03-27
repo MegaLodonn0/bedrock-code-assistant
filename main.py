@@ -4,6 +4,7 @@ import argparse
 import sys
 import os
 from pathlib import Path
+from typing import Optional
 
 from config import get_config, ConfigError
 from core import BedrockClient
@@ -261,8 +262,18 @@ Please provide:
             # Step 1: Provider selection
             provider, provider_models = screen.show_provider_selection()
             
+            # Check if user cancelled
+            if provider is None or provider_models is None:
+                print_info("Model selection cancelled")
+                return
+            
             # Step 2: Model selection for selected provider
             selected = screen.show_models_for_provider(provider, provider_models)
+            
+            # Check if user cancelled
+            if selected is None:
+                print_info("Model selection cancelled")
+                return
             
             # Display confirmation with usage limits and checkmark
             os.system('cls' if os.name == 'nt' else 'clear')
@@ -291,8 +302,18 @@ Please provide:
             # Step 1: Provider selection
             provider, provider_models = screen.show_provider_selection()
             
+            # Check if user cancelled
+            if provider is None or provider_models is None:
+                print_info("Model selection cancelled")
+                return
+            
             # Step 2: Model selection for selected provider
             selected = screen.show_models_for_provider(provider, provider_models)
+            
+            # Check if user cancelled
+            if selected is None:
+                print_info("Model selection cancelled")
+                return
             
             # Save selected model
             self.selected_model = selected
@@ -329,13 +350,51 @@ Please provide:
     
     
     def interactive(self):
-        """Start interactive mode"""
+        """Start interactive mode with smart suggestions"""
+        from utils.suggestions import SmartSuggestions
+        from utils.keyboard import KeyboardInput
+        
         print_header("AWS Bedrock Code Assistant")
-        print_info("Type '/help' for commands, '/exit' to quit\n")
+        print_info("Type '/help' for commands, '/exit' to quit")
+        print_check("Smart suggestions enabled - type / for command hints\n")
+        
+        commands = list(SlashCommandParser.SLASH_COMMANDS.keys())
         
         while True:
             try:
-                user_input = input(f"{Colors.BOLD}{Colors.GREEN}>> {Colors.END}").strip()
+                # Show prompt and get input
+                sys.stdout.write(f"{Colors.BOLD}{Colors.GREEN}>> {Colors.END}")
+                sys.stdout.flush()
+                
+                # Use interactive input with real-time suggestions
+                from utils import InteractiveInput, SmartSuggestions
+                
+                def suggestion_callback(typed: str, tab_pressed: bool = False) -> Optional[str]:
+                    """Show suggestions as user types"""
+                    if typed.startswith('/'):
+                        cmd_part = typed[1:]
+                        suggestions = SmartSuggestions(
+                            list(SlashCommandParser.SLASH_COMMANDS.keys())
+                        )
+                        best = suggestions.get_best_match(cmd_part, 
+                                                         list(SlashCommandParser.SLASH_COMMANDS.keys()))
+                        if tab_pressed and best:
+                            # Return auto-completed command
+                            return '/' + best
+                        elif best:
+                            # Show inline suggestion
+                            remaining = best[len(cmd_part):]
+                            sys.stdout.write(f"{Colors.CYAN}{remaining}{Colors.END}")
+                            sys.stdout.flush()
+                            for _ in range(len(remaining)):
+                                sys.stdout.write('\b')
+                            sys.stdout.flush()
+                    return None
+                
+                user_input = InteractiveInput.get_line_with_callback(
+                    prompt="",
+                    on_char_callback=suggestion_callback
+                ).strip()
                 
                 if not user_input:
                     continue
