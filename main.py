@@ -84,14 +84,32 @@ class CodeAssistantCLI:
             print(output)
     
     def _cmd_list_models(self, args: str):
-        """Handle /models command"""
+        """Handle /models command - full-screen provider selection with usage limits"""
         try:
             models = self.bedrock.list_models()
+            screen = ProviderScreen(models)
             
-            # Format as table
-            table = TableFormatter.format_models_table(models)
-            print_section("Available Models:")
-            print(table)
+            # Step 1: Provider selection
+            provider, provider_models = screen.show_provider_selection()
+            
+            # Step 2: Model selection for selected provider
+            selected = screen.show_models_for_provider(provider, provider_models)
+            
+            # Display confirmation with usage limits
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print()
+            print_success(f"Selected Model:")
+            print(f"  {Colors.GREEN}Name: {selected['modelName']}{Colors.END}")
+            print(f"  {Colors.GREEN}ID: {selected['modelId']}{Colors.END}")
+            print(f"  {Colors.GREEN}Provider: {selected['providerName']}{Colors.END}")
+            print()
+            
+            # Display usage limits
+            self.usage_tracker.display_usage_right_panel(os.get_terminal_size().columns)
+            print()
+            
+            input("Press Enter to continue...")
+        
         except Exception as e:
             print_error(f"Failed to list models: {str(e)}")
     
