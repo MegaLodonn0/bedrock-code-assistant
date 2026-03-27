@@ -7,11 +7,12 @@ from pathlib import Path
 
 from config import get_config, ConfigError
 from core import BedrockClient
+from core.conversation import ConversationManager
 from utils import (
     print_header, print_section, print_success, print_error,
     print_warning, print_info, print_models, print_response,
     execute_command, ask_confirmation, validate_command,
-    ProviderScreen, UsageTracker, TableFormatter, Colors
+    ProviderScreen, UsageTracker, TableFormatter, Colors, FileReader
 )
 from commands.parser import SlashCommandParser, CommandRegistry
 
@@ -27,6 +28,7 @@ class CodeAssistantCLI:
             self.usage_tracker = UsageTracker(self.bedrock)  # Pass bedrock_client
             self.command_registry = CommandRegistry()
             self.selected_model = None  # Track user-selected model
+            self.conversation = ConversationManager()  # Track conversation history
             self._register_commands()
             print_success("Connected to AWS Bedrock")
         except ConfigError as e:
@@ -39,7 +41,12 @@ class CodeAssistantCLI:
     def _register_commands(self):
         """Register slash commands"""
         self.command_registry.register('ask', self._cmd_ask)
+        self.command_registry.register('read', self._cmd_read)
         self.command_registry.register('analyze', self._cmd_analyze)
+        self.command_registry.register('grep', self._cmd_grep)
+        self.command_registry.register('save', self._cmd_save)
+        self.command_registry.register('load', self._cmd_load)
+        self.command_registry.register('compress', self._cmd_compress)
         self.command_registry.register('exec', self._cmd_exec)
         self.command_registry.register('models', self._cmd_list_models)
         self.command_registry.register('select', self._cmd_select_model)
@@ -83,9 +90,147 @@ class CodeAssistantCLI:
             else:
                 print_error(f"Failed to get response: {error_msg}")
     
+    def _cmd_read(self, args: str):
+        """Handle /read command - read and display file content"""
+        if not args:
+            print_error("Usage: /read <filepath>")
+            return
+        
+        try:
+            success, content = FileReader.read_file(args)
+            
+            if success:
+                print_section(f"File: {args}")
+                print(content)
+                self.conversation.add_message('user', f"Read file: {args}", "file_reader")
+            else:
+                print_error(content)
+        
+        except Exception as e:
+            print_error(f"Failed to read file: {str(e)}")
+    
     def _cmd_analyze(self, args: str):
-        """Handle /analyze command"""
-        print_info("Analyze feature coming soon!")
+        """Handle /analyze command - analyze file with AI"""
+        if not args:
+            print_error("Usage: /analyze <filepath>")
+            return
+        
+        try:
+            success, content = FileReader.read_file(args)
+            
+            if not success:
+                print_error(content)
+                return
+            
+            # Create analysis prompt
+            prompt = f"""Analyze the following code/text file and provide insights:
+
+File: {args}
+
+Content:
+{content}
+
+Please provide:
+1. Summary of what this file does
+2. Key findings or observations
+3. Potential issues or improvements
+4. Overall assessment"""
+            
+            # Use selected model or default
+            if self.selected_model:
+                model_id = self.selected_model['modelId']
+                model_name = self.selected_model['modelName']
+            else:
+                model_id = self.config.bedrock.get('default_model', 
+                                                   'amazon.nova-micro-v1:0')
+                model_name = "Default"
+            
+            print_info(f"Analyzing with {model_name}...")
+            
+            response = self.bedrock.invoke_model(model_id, prompt)
+            print_response("Analysis:", response, model_id)
+            
+            self.conversation.add_message('user', f"Analyze file: {args}", "analyze")
+            self.conversation.add_message('assistant', response, model_id)
+            self.usage_tracker.increment_request()
+        
+        except Exception as e:
+            error_msg = str(e)
+            
+            if "on-demand throughput" in error_msg.lower() and "supported" in error_msg.lower():
+                print_warning("This model requires Provisioned Throughput.")
+                print("  Use /select to try another model")
+            else:
+                print_error(f"Failed to analyze: {error_msg}")
+    
+    def _cmd_grep(self, args: str):
+        """Handle /grep command - search for pattern in files"""
+        if not args:
+            print_error("Usage: /grep <pattern> [directory]")
+            return
+        
+        try:
+            parts = args.split(maxsplit=1)
+            pattern = parts[0]
+            directory = parts[1] if len(parts) > 1 else "."
+            
+            success, results = FileReader.grep_pattern(pattern, directory)
+            
+            if success:
+                print_section(f"Search Results for: {pattern}")
+                print(results)
+                self.conversation.add_message('user', f"Grep pattern: {pattern}", "grep")
+            else:
+                print_error(results)
+        
+        except Exception as e:
+            print_error(f"Failed to search: {str(e)}")
+    
+    def _cmd_save(self, args: str):
+        """Handle /save command - save conversation to file"""
+        if not args:
+            print_error("Usage: /save <filename>")
+            return
+        
+        try:
+            success, message = self.conversation.save_conversation(args)
+            
+            if success:
+                print_success(message)
+            else:
+                print_error(message)
+        
+        except Exception as e:
+            print_error(f"Failed to save conversation: {str(e)}")
+    
+    def _cmd_load(self, args: str):
+        """Handle /load command - load conversation from file"""
+        if not args:
+            print_error("Usage: /load <filename>")
+            return
+        
+        try:
+            success, message = self.conversation.load_conversation(args)
+            
+            if success:
+                print_success(message)
+                # Display context from loaded conversation
+                print_section("Recent Messages:")
+                print(self.conversation.get_context(last_n=3))
+            else:
+                print_error(message)
+        
+        except Exception as e:
+            print_error(f"Failed to load conversation: {str(e)}")
+    
+    def _cmd_compress(self, args: str):
+        """Handle /compress command - compress conversation history"""
+        try:
+            result = self.conversation.compress_history()
+            print_info(result)
+        
+        except Exception as e:
+            print_error(f"Failed to compress: {str(e)}")
     
     def _cmd_exec(self, args: str):
         """Handle /exec command"""

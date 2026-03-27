@@ -8,13 +8,17 @@ class SlashCommandParser:
     
     SLASH_COMMANDS = {
         'ask': 'Ask AI a question',
-        'analyze': 'Analyze code or files',
+        'read': 'Read file content with line numbers',
+        'analyze': 'Analyze file with AI assistant',
+        'grep': 'Search for pattern in files',
+        'save': 'Save conversation to file',
+        'load': 'Load conversation from file',
+        'compress': 'Compress conversation history',
         'exec': 'Execute shell command',
         'models': 'Select and list models',
         'select': 'Interactive model selection',
         'help': 'Show help information',
         'usage': 'Show API usage limits',
-        'history': 'Show conversation history',
         'exit': 'Exit the assistant',
     }
     
