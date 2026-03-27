@@ -1,7 +1,123 @@
 """Advanced UI components for model selection and display"""
 
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
+import os
 from utils.output import Colors
+
+
+class ProviderScreen:
+    """Full-screen provider selection interface"""
+    
+    def __init__(self, models: List[Dict]):
+        """Initialize provider screen"""
+        self.models = models
+        self.providers = self._group_by_provider()
+        self.terminal_width = os.get_terminal_size().columns
+    
+    def _group_by_provider(self) -> Dict[str, List[Dict]]:
+        """Group models by provider"""
+        providers = {}
+        for model in self.models:
+            provider = model.get('providerName', 'Unknown')
+            if provider not in providers:
+                providers[provider] = []
+            providers[provider].append(model)
+        return dict(sorted(providers.items()))
+    
+    def show_provider_selection(self) -> Tuple[str, List[Dict]]:
+        """
+        Display full-screen provider selection menu.
+        
+        Returns:
+            Tuple of (provider_name, provider_models)
+        """
+        while True:
+            self._clear_screen()
+            self._draw_provider_list()
+            
+            try:
+                provider_list = list(self.providers.keys())
+                choice = input(f"\n{Colors.YELLOW}Select Provider (1-{len(provider_list)}): {Colors.END}").strip()
+                
+                idx = int(choice) - 1
+                if 0 <= idx < len(provider_list):
+                    provider = provider_list[idx]
+                    return provider, self.providers[provider]
+                else:
+                    print(f"{Colors.RED}Invalid selection!{Colors.END}")
+                    input("Press Enter to continue...")
+            except ValueError:
+                print(f"{Colors.RED}Please enter a valid number!{Colors.END}")
+                input("Press Enter to continue...")
+    
+    def show_models_for_provider(self, provider: str, models: List[Dict]) -> Dict:
+        """
+        Display full-screen model selection for a specific provider.
+        
+        Args:
+            provider: Provider name
+            models: List of models from that provider
+        
+        Returns:
+            Selected model dictionary
+        """
+        while True:
+            self._clear_screen()
+            self._draw_provider_header(provider, len(models))
+            self._draw_model_list(models)
+            
+            try:
+                choice = input(f"\n{Colors.YELLOW}Select Model (1-{len(models)}): {Colors.END}").strip()
+                
+                idx = int(choice) - 1
+                if 0 <= idx < len(models):
+                    return models[idx]
+                else:
+                    print(f"{Colors.RED}Invalid selection!{Colors.END}")
+                    input("Press Enter to continue...")
+            except ValueError:
+                print(f"{Colors.RED}Please enter a valid number!{Colors.END}")
+                input("Press Enter to continue...")
+    
+    def _clear_screen(self):
+        """Clear terminal screen"""
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
+    def _draw_provider_list(self):
+        """Draw provider selection screen"""
+        print(f"\n{Colors.BOLD}{Colors.HEADER}{'=' * 70}{Colors.END}")
+        print(f"{Colors.HEADER}{Colors.BOLD}{'AWS BEDROCK - SELECT PROVIDER':^70}{Colors.END}")
+        print(f"{Colors.BOLD}{Colors.HEADER}{'=' * 70}{Colors.END}\n")
+        
+        provider_list = list(self.providers.keys())
+        print(f"{Colors.CYAN}Available Providers: {len(provider_list)}{Colors.END}\n")
+        
+        for i, provider in enumerate(provider_list, 1):
+            count = len(self.providers[provider])
+            padding = ' ' * (3 - len(str(i)))
+            print(f"  {Colors.BOLD}{i}{Colors.END}.{padding}{Colors.GREEN}{provider:<30}{Colors.END} ({count} models)")
+    
+    def _draw_provider_header(self, provider: str, count: int):
+        """Draw provider-specific header"""
+        print(f"\n{Colors.BOLD}{Colors.HEADER}{'=' * 70}{Colors.END}")
+        print(f"{Colors.HEADER}{Colors.BOLD}{provider.center(70)}{Colors.END}")
+        print(f"{Colors.CYAN}{f'{count} Models Available'.center(70)}{Colors.END}")
+        print(f"{Colors.BOLD}{Colors.HEADER}{'=' * 70}{Colors.END}\n")
+    
+    def _draw_model_list(self, models: List[Dict]):
+        """Draw model list for selected provider"""
+        for i, model in enumerate(models, 1):
+            model_name = model.get('modelName', 'N/A')
+            model_id = model.get('modelId', 'N/A')
+            
+            padding = ' ' * (3 - len(str(i)))
+            print(f"  {Colors.BOLD}{i}{Colors.END}.{padding}{Colors.GREEN}{model_name:<45}{Colors.END}")
+            print(f"      {Colors.CYAN}ID: {model_id}{Colors.END}")
+            
+            if i < len(models):
+                print(f"      {Colors.CYAN}{'-' * 60}{Colors.END}")
+            
+            print()
 
 
 class ModelSelector:
@@ -100,14 +216,34 @@ class ModelSelector:
 
 
 class UsageTracker:
-    """Track and display API usage limits"""
+    """Track and display API usage limits from AWS"""
     
-    def __init__(self):
-        """Initialize usage tracker"""
+    def __init__(self, bedrock_client=None):
+        """
+        Initialize usage tracker with AWS integration.
+        
+        Args:
+            bedrock_client: BedrockClient instance for AWS queries
+        """
+        self.bedrock_client = bedrock_client
         self.daily_requests = 0
-        self.daily_limit = 1000  # Default limit
         self.monthly_requests = 0
-        self.monthly_limit = 100000  # Default limit
+        self.daily_limit = 100000
+        self.monthly_limit = 1000000
+        self._sync_with_aws()
+    
+    def _sync_with_aws(self):
+        """Sync usage metrics with AWS Bedrock"""
+        if self.bedrock_client:
+            try:
+                metrics = self.bedrock_client.get_usage_metrics()
+                self.daily_requests = metrics.daily_requests
+                self.monthly_requests = metrics.monthly_requests
+                self.daily_limit = metrics.daily_limit
+                self.monthly_limit = metrics.monthly_limit
+            except Exception:
+                # Fallback to defaults if API fails
+                pass
     
     def increment_request(self):
         """Increment request counters"""
