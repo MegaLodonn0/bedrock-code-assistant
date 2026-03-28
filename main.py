@@ -54,6 +54,7 @@ class CodeAssistantCLI:
         self.command_registry.register('load', self._cmd_load)
         self.command_registry.register('compress', self._cmd_compress)
         self.command_registry.register('exec', self._cmd_exec)
+        self.command_registry.register('map', self._cmd_map)
         self.command_registry.register('models', self._cmd_list_models)
         self.command_registry.register('select', self._cmd_select_model)
         self.command_registry.register('help', self._cmd_help)
@@ -237,6 +238,69 @@ Please provide:
         
         except Exception as e:
             print_error(f"Failed to compress: {str(e)}")
+    
+    def _cmd_map(self, args: str):
+        """Handle /map command - create task map and delegate to agents"""
+        if not args:
+            print_error("Usage: /map <task_description>")
+            print_info("Example: /map analyze bedrock integration")
+            return
+        
+        try:
+            from core import MapCoordinator
+            import json
+            
+            print_info(f"Creating map for task: {args}")
+            
+            # Initialize coordinator
+            coordinator = MapCoordinator(
+                repo_path='.',
+                bedrock_client=self.bedrock
+            )
+            
+            # Analyze repo if not already done
+            if not coordinator.repo_analyzer.files_analysis:
+                print_section("Step 1: Analyzing Repository")
+                repo_map = coordinator.analyze_repository()
+                print_success(f"✓ Analyzed {repo_map['total_files']} files", checkmark=True)
+            
+            # Create task map
+            print_section("Step 2: Creating Task Map")
+            task_map = coordinator.create_task_map(args, max_subtasks=5)
+            print_success(f"✓ Created {len(task_map.subtasks)} subtasks", checkmark=True)
+            print_info(f"Token compression: {task_map.compression_ratio:.1f}%")
+            
+            # Show subtasks
+            print_section("Subtasks to Execute:")
+            for i, subtask in enumerate(task_map.subtasks, 1):
+                print(f"  {i}. {subtask['name']}")
+                if subtask.get('filepath'):
+                    print(f"     File: {subtask['filepath']}")
+                print(f"     Type: {subtask['type']}")
+            
+            # Execute task map
+            print_section("Step 3: Executing with Agents")
+            results = coordinator.execute_task_map(task_map)
+            
+            # Display results
+            print_section("Execution Results:")
+            print_success(f"✓ Status: {results['status']}", checkmark=True)
+            print(f"  Agents executed: {results['agents_executed']}")
+            print(f"  Successful: {results['agents_successful']}")
+            print(f"  Failed: {results['agents_failed']}")
+            print()
+            print_info("Metrics:")
+            print(f"  • Total tokens: {results['metrics']['total_tokens_used']:.0f}")
+            print(f"  • Execution time: {results['metrics']['total_execution_time']:.2f}s")
+            print(f"  • Token savings: {results['metrics']['token_savings']}")
+            
+            # Cleanup
+            coordinator.cleanup()
+        
+        except ImportError:
+            print_error("Map system not available (MapCoordinator not found)")
+        except Exception as e:
+            print_error(f"Failed to create map: {str(e)}")
     
     def _cmd_exec(self, args: str):
         """Handle /exec command"""
