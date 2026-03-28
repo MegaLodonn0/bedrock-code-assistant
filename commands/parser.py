@@ -15,6 +15,7 @@ class SlashCommandParser:
         'load': 'Load conversation from file',
         'compress': 'Compress conversation history',
         'exec': 'Execute shell command',
+        'map': 'Create multi-agent task map',
         'models': 'Select and list models',
         'select': 'Interactive model selection',
         'help': 'Show help information',
