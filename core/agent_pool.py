@@ -7,6 +7,10 @@ from datetime import datetime
 import time
 from threading import Lock
 
+from core.agent_memory import AgentMemory, Interaction
+from core.agent_specialization import AgentType, AgentSpecializer
+from core.agent_tools import AgentToolKit
+
 
 @dataclass
 class AgentTask:
@@ -35,19 +39,26 @@ class AgentResult:
 class AIAgent:
     """Single AI agent for specific task"""
     
-    def __init__(self, agent_id: str, bedrock_client=None):
+    def __init__(self, agent_id: str, bedrock_client=None, agent_type: AgentType = AgentType.GENERIC):
         """
         Initialize agent
         
         Args:
             agent_id: Unique agent identifier
             bedrock_client: Bedrock client for model invocation
+            agent_type: Agent specialization type
         """
         self.agent_id = agent_id
         self.bedrock_client = bedrock_client
+        self.agent_type = agent_type
         self.created_at = datetime.now()
         self.memory_usage = 0
         self.task: Optional[AgentTask] = None
+        
+        # V3.0 Features
+        self.memory = AgentMemory(agent_id)  # Feature #1: Memory
+        self.tools = AgentToolKit  # Feature #3: Tools
+        self.specialization_profile = AgentSpecializer.get_profile(agent_type)
     
     def assign_task(self, task: AgentTask):
         """Assign a task to this agent"""
@@ -76,7 +87,7 @@ class AIAgent:
         )
         
         try:
-            # Build prompt for agent
+            # Build prompt with memory context and specialization
             prompt = self._build_prompt()
             
             # Invoke model
@@ -89,11 +100,23 @@ class AIAgent:
                 result.tokens_used = self._estimate_tokens(prompt, response)
             else:
                 # Mock response for testing
-                result.result = f"[Agent {self.agent_id}] Processed: {self.task.name}"
+                result.result = f"[Agent {self.agent_id} ({AgentSpecializer.get_name(self.agent_type)})] Processed: {self.task.name}"
                 result.tokens_used = len(prompt.split()) * 1.3
             
             result.status = "completed"
             result.execution_time = time.time() - start_time
+            
+            # Store in memory for learning (Feature #1)
+            interaction = Interaction(
+                task_name=self.task.name,
+                task_description=self.task.description,
+                input_code=self.task.code_context,
+                output=result.result or "",
+                success=result.status == "completed",
+                error=result.error,
+                tokens_used=result.tokens_used
+            )
+            self.memory.store(interaction)
             
             return result
         
@@ -104,9 +127,21 @@ class AIAgent:
             return result
     
     def _build_prompt(self) -> str:
-        """Build prompt for agent execution"""
-        prompt = f"""You are a specialized code analysis agent.
+        """Build prompt for agent execution with memory and specialization"""
         
+        # Get system prompt from specialization profile (Feature #2)
+        system_prompt = AgentSpecializer.get_system_prompt(self.agent_type)
+        
+        # Add memory context hints (Feature #1)
+        memory_hints = self.memory.get_context_hints(self.task.name)
+        
+        # Build final prompt
+        prompt = f"""{system_prompt}
+
+=== CONTEXT FROM YOUR MEMORY ===
+{memory_hints}
+
+=== CURRENT TASK ===
 Task: {self.task.name}
 Description: {self.task.description}
 
@@ -116,7 +151,25 @@ Code Context:
 Instructions:
 {self.task.instructions}
 
-Provide a focused analysis of this code section."""
+=== AVAILABLE TOOLS (Feature #3) ===
+You have access to these tools:
+- read_file(path): Read code file
+- write_file(path, content): Write to file  
+- list_files(dir): List directory contents
+- run_git(command): Execute git command
+- lint(file): Run linter on code
+- check_syntax(file): Check syntax errors
+- run_tests(dir): Run pytest
+- execute_python(code): Run Python code (max 5s)
+
+Format tool calls as: <tool:name param1=value1 param2=value2>
+
+=== YOUR SPECIALIZATION ===
+You are a {AgentSpecializer.get_name(self.agent_type)}
+Focus areas: {', '.join(self.specialization_profile.check_points)}
+
+Provide focused analysis and be specific."""
+        
         return prompt
     
     def _estimate_tokens(self, prompt: str, response: str) -> int:
@@ -167,7 +220,12 @@ class AgentPool:
                 raise RuntimeError(f"Max agents ({self.max_agents}) reached")
             
             agent_id = f"agent_{uuid.uuid4().hex[:8]}"
-            agent = AIAgent(agent_id, self.bedrock_client)
+            
+            # Feature #2: Auto-assign specialization based on agent purpose
+            # (can be overridden by caller if needed)
+            agent_type = AgentType.GENERIC
+            
+            agent = AIAgent(agent_id, self.bedrock_client, agent_type)
             self.agents[agent_id] = agent
             
             return agent
