@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BedrockInvokeModels",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:ListFoundationModels"
+      ],
+      "Resource": "arn:aws:bedrock:*::foundation-model/*anthropic.claude*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "BedrockCopilot"
+        }
+      }
+    },
+    {
+      "Sid": "DenyDangerous",
+      "Effect": "Deny",
+      "Action": ["iam:*", "kms:*", "sts:AssumeRole"],
+      "Resource": "*"
+    }
+  ]
+}
