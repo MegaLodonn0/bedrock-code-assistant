@@ -9,7 +9,7 @@ load_dotenv()
 
 class AWSSecurity:
     @staticmethod
-    def get_sessiog(profile_name=None):
+    def get_session(profile_name=None):
         profile = profile_name or os.getenv('AWS_PROFILE')
         region = os.getenv('AWS_REGION', 'us-east-1')
         if profile:
@@ -32,10 +32,9 @@ class BedrockHardened:
         return json.loads(response['body'].read()).get('completion', '')
 
 class AWSCredentialChain:
-    @staticmethod"
+    @staticmethod
     def validate():
         try:
-            session = AWSSecurity.get_session()
-            return session.get_credentials() is not None
+            return AWSSecurity.get_session().get_credentials() is not None
         except:
             return False
