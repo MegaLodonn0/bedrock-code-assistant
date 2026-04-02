@@ -26,6 +26,11 @@ HELP_TEXT = """
   [green]/analyze <file>[/green]      Analyze a source file with AI insights
   [green]/execute <code>[/green]      Run code in Docker sandbox (HITL approval required)
 
+[bold yellow]🤖 Agent Mode (NEW):[/bold yellow]
+  [green]/agent <query>[/green]       Ask the AI agent — it can read files, browse
+                        your project, run terminal commands (with approval),
+                        and analyze outputs autonomously.
+
 [bold cyan]Model Management:[/bold cyan]
   [green]/model <name>[/green]        Switch the active model  (e.g. /model nova-lite)
   [green]/models[/green]              List all available Bedrock models
@@ -101,6 +106,20 @@ async def interactive_mode(executor: Executor):
                 title = "Output" if success else "Error"
                 style = "green" if success else "red"
                 console.print(Panel(result, title=title, border_style=style))
+
+            # ── Agent Mode ──────────────────────────────────────────
+            elif user_input.startswith("/agent "):
+                query = user_input[7:].strip()
+                if not query:
+                    console.print("[yellow]Usage:[/yellow] /agent <your request>")
+                    continue
+                console.print("[bold yellow]🤖 Agent mode activated[/bold yellow]")
+                r = await executor.ask_agent(query, console=console)
+                console.print(Panel(
+                    r,
+                    title=f"[bold]🤖 Agent Response[/bold] [{executor.current_model}]",
+                    border_style="yellow",
+                ))
 
             # ── Model Management ────────────────────────────────────
             elif user_input.startswith("/model "):
