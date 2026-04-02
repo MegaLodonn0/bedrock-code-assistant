@@ -1,10 +1,11 @@
 """Human feedback loop for interactive agent refinement."""
 
 import logging
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Callable, Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -162,12 +163,13 @@ class InteractiveFeedbackLoop:
         self.collector = FeedbackCollector(max_iterations)
         self.max_iterations = max_iterations
     
-    def start_refinement(
+    async def start_refinement(
         self,
         request: str,
-        initial_output: str
+        initial_output: str,
+        revision_callback: Optional[Callable[[str], Awaitable[str]]] = None
     ) -> Tuple[str, bool]:
-        """Start interactive refinement loop."""
+        """Start interactive refinement loop asynchronously to prevent blocking."""
         session = self.collector.create_session(request, initial_output)
         
         print("\n" + "="*50)
@@ -186,32 +188,38 @@ class InteractiveFeedbackLoop:
             print("  3. revise   - Request specific revision")
             print("  4. improve  - Ask for improvements")
             
-            action = input("\n👤 Your feedback (approve/reject/revise/improve): ").strip().lower()
-            
+            action = await asyncio.to_thread(input, "\n👤 Your feedback (approve/reject/revise/improve): ")
+            action = action.strip().lower()
+
             if action in ["approve", "reject", "revise", "improve"]:
-                comment = input("💬 Comments (optional): ").strip()
+                comment = await asyncio.to_thread(input, "💬 Comments (optional): ")
+                comment = comment.strip()
                 success, message = self.collector.collect_feedback(session, action, comment)
-                
+
                 print(f"\n{message}")
-                
+
                 if success:
                     session.revisions.append(current_output)
                     return current_output, True
             else:
                 print("❌ Invalid input. Please try again.")
                 continue
-            
+
             # If rejected/revised and iterations remaining
             if self.collector.should_continue(session):
                 print("\n🤖 Agent generating revision...")
-                # TODO: Call agent to revise
-                revised_output = input("\n[SIMULATED] Enter revised output: ").strip()
-                
+                if revision_callback:
+                    prompt = f"Original Request: {request}\nPrevious Output:\n{current_output}\n\nUser Feedback [{action}]: {comment}\nPlease revise the output based on the user's feedback."
+                    revised_output = await revision_callback(prompt)
+                else:
+                    revised_output = "[Revision callback not provided. Exiting loop.]"
+                    break
+
                 if revised_output:
                     current_output = revised_output
                     session.revisions.append(current_output)
                     print(f"\n💾 Revised Output:\n{self._format_output(current_output)}\n")
-        
+
         print("\n" + self.collector.get_session_summary(session))
         return current_output, session.is_approved
     

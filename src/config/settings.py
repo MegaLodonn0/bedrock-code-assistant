@@ -44,7 +44,7 @@ class Settings:
     
     @property
     def default_model(self) -> str:
-        """Get default model (cheapest)."""
+        """Get default model (cheapest and most available)."""
         return "nova-lite"
     
     @property
@@ -66,6 +66,24 @@ class Settings:
     def docker_memory_limit(self) -> str:
         """Get Docker memory limit."""
         return os.getenv("DOCKER_MEMORY_LIMIT", "256m")
+
+    @property
+    def docker_user(self) -> str:
+        """User to run Docker container as (non-root)."""
+        return os.getenv("DOCKER_USER", "1000:1000")
+
+    @property
+    def docker_capabilities(self) -> List[str]:
+        """Docker capabilities to drop for security. Comma‑separated list in env.
+        Returns a list of capability names, e.g., ['ALL'].
+        """
+        caps = os.getenv("DOCKER_CAP_DROP", "ALL")
+        return [c.strip() for c in caps.split(',') if c.strip()]
+
+    @property
+    def docker_network_disabled(self) -> bool:
+        """Whether to disable network access in Docker sandbox."""
+        return os.getenv("DOCKER_NETWORK_DISABLED", "true").lower() == "true"
     
     @property
     def vector_db_path(self) -> Path:
