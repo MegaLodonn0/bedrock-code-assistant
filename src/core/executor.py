@@ -76,6 +76,12 @@ class Executor:
     # Model Management
     # ─────────────────────────────────────────────
 
+    def _resolve_model_id(self, model_id: str = None) -> str:
+        """Resolve the active model ID string for Bedrock API calls."""
+        return model_id or settings.bedrock_models.get(
+            self.current_model, 'amazon.nova-lite-v1:0'
+        )
+
     def set_model(self, model_name: str) -> str:
         """Switch the active Bedrock model."""
         models = settings.bedrock_models
@@ -110,9 +116,7 @@ class Executor:
             return response
 
         try:
-            resolved_model_id = model_id or settings.bedrock_models.get(
-                self.current_model, 'amazon.nova-lite-v1:0'
-            )
+            resolved_model_id = self._resolve_model_id(model_id)
             # BUG-02 fix: wrap Bedrock call in retry_policy for transient error recovery
             response = await self.retry_policy.execute(
                 self.bedrock.invoke, resolved_model_id, query
@@ -192,9 +196,8 @@ class Executor:
         if not self.sandbox or not self.sandbox.client:
             return False, "Docker is not available. Install Docker to use /execute."
 
-        # BUG-07 fix: use a dedicated method that shows the code clearly,
-        # not a file-diff panel with a meaningless "sandbox" filepath.
-        approved = HITLGate.request_approval("code_to_execute", "", code)
+        # Async-safe approval — does not block the event loop
+        approved = await HITLGate.async_request_approval("code_to_execute", "", code)
         if not approved:
             return False, "Code execution cancelled by user."
 
@@ -333,3 +336,20 @@ class Executor:
             return '\n'.join(lines)
         except Exception as e:
             return f"List sessions error: {e}"
+
+    # ─────────────────────────────────────────────
+    # Agentic Mode
+    # ─────────────────────────────────────────────
+
+    async def ask_agent(self, query: str, console=None) -> str:
+        """Process a query through the agentic ReAct loop with tool access.
+
+        The agent can read files, list directories, search code, and run
+        terminal commands (with user approval) to answer the user's question.
+        """
+        from src.core.agent.orchestrator import AgentOrchestrator
+        orchestrator = AgentOrchestrator(self)
+        response = await orchestrator.run(query, console=console)
+        self.last_response = response
+        self.last_request = query
+        return response

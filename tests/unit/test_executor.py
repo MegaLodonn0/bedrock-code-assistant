@@ -433,7 +433,7 @@ class TestExecuteCode:
         ex.sandbox = MagicMock()
         ex.sandbox.client = MagicMock()  # Docker available
 
-        with patch("src.core.executor.HITLGate.request_approval", return_value=False):
+        with patch("src.core.executor.HITLGate.async_request_approval", new=AsyncMock(return_value=False)):
             success, msg = run(ex.execute_code("rm -rf /"))
         assert success is False
         assert "cancel" in msg.lower() or "Cancel" in msg
@@ -444,7 +444,7 @@ class TestExecuteCode:
         ex.sandbox.client = MagicMock()
         ex.sandbox.execute.return_value = (True, "42\n")
 
-        with patch("src.core.executor.HITLGate.request_approval", return_value=True):
+        with patch("src.core.executor.HITLGate.async_request_approval", new=AsyncMock(return_value=True)):
             success, output = run(ex.execute_code("print(42)"))
 
         assert success is True

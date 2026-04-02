@@ -22,10 +22,9 @@ class DockerSandbox:
         try:
             container = self.client.containers.run(
                 self.image,
-                command=['python', '-c', code],
+                command=['timeout', str(timeout), 'python', '-c', code],
                 network_disabled=self.network_disabled,
                 mem_limit=mem_limit,
-                timeout=timeout,
                 user=self.user,
                 cap_drop=self.cap_drop,
                 pids_limit=50,
