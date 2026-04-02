@@ -167,7 +167,7 @@ async def tool_search_code(query: str, path: str = ".", max_results: int = 50) -
         results: List[str] = []
 
         skip_dirs = {".git", "__pycache__", ".pytest_cache", "node_modules",
-                     "venv", ".venv", "htmlcov", "data"}
+                     "venv", ".venv", "htmlcov"}
         text_exts = {".py", ".js", ".ts", ".json", ".md", ".txt", ".toml",
                      ".yaml", ".yml", ".cfg", ".ini", ".html", ".css",
                      ".sh", ".bat", ".env"}

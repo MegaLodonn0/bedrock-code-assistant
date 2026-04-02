@@ -35,11 +35,38 @@ class Settings:
     def bedrock_models(self) -> Dict[str, str]:
         """Get supported Bedrock models."""
         return {
-            "claude-opus": "anthropic.claude-3-opus-20250219-v1:0",
-            "claude-sonnet": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-            "claude-haiku": "anthropic.claude-3-5-haiku-20241022-v1:0",
-            "nova-lite": "amazon.nova-lite-v1:0",
+            # Anthropic - Global Cross-Region (Cheaper, High Availability)
+            "claude-sonnet-global": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+            "claude-haiku-global": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "claude-opus-global": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+            
+            # Anthropic - US Cross-Region
+            "claude-sonnet-us": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "claude-haiku-us": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+            "claude-opus-us": "us.anthropic.claude-3-opus-20240229-v1:0",
+            "claude-3-7-sonnet-us": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            
+            # Anthropic - EU Cross-Region
+            "claude-sonnet-eu": "eu.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "claude-haiku-eu": "eu.anthropic.claude-3-5-haiku-20241022-v1:0",
+
+            # Amazon Nova (Native & Cross-Region)
+            "nova-lite-global": "global.amazon.nova-2-lite-v1:0",
+            "nova-pro-us": "us.amazon.nova-pro-v1:0",
+            "nova-lite-us": "us.amazon.nova-lite-v1:0",
+            "nova-micro-us": "us.amazon.nova-micro-v1:0",
             "nova-pro": "amazon.nova-pro-v1:0",
+            "nova-lite": "amazon.nova-lite-v1:0",
+
+            # Meta Llama 3.1 & Mistral
+            "llama-3-1-70b-us": "us.meta.llama3-1-70b-instruct-v1:0",
+            "mistral-large": "mistral.mistral-large-2402-v1:0",
+            
+            # Deprecated / Legacy Defaults mapped to user preferences
+            "claude-opus": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+            "claude-sonnet": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+            "claude-haiku": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "nova-lite": "global.amazon.nova-2-lite-v1:0",
         }
     
     @property
