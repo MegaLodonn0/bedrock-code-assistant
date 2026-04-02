@@ -119,13 +119,22 @@ class AgentOrchestrator:
         Returns:
             The agent's final answer as a string.
         """
-        # Build conversation with system prompt
+        # Build conversation from global executing history instead of starting blank
         system_prompt = build_system_prompt(
             self.tool_registry.get_tool_descriptions()
         )
-        messages = [
-            {"role": "user", "content": [{"text": user_query}]}
-        ]
+        # Parse existing query/response history into Bedrock messages
+        messages = []
+        for turn in self.executor.conversation_history:
+            if "query" in turn and "response" in turn:
+                messages.append({"role": "user", "content": [{"text": turn["query"]}]})
+                messages.append({"role": "assistant", "content": [{"text": turn["response"]}]})
+            elif "role" in turn and "content" in turn:
+                # If some agent iterations saved direct message format
+                messages.append(turn)
+                
+        # Append the current request
+        messages.append({"role": "user", "content": [{"text": user_query}]})
 
         total_tool_calls = 0
 
@@ -146,6 +155,7 @@ class AgentOrchestrator:
 
             if not tool_calls:
                 # No tool calls → this is the final answer
+                self.executor.conversation_history.append({"query": user_query, "response": ai_response})
                 return ai_response
 
             # Show what tools the agent wants to use
@@ -173,6 +183,10 @@ class AgentOrchestrator:
             )}]
         })
         final = await self._call_ai(system_prompt, messages)
+        
+        if final:
+            self.executor.conversation_history.append({"query": user_query, "response": final})
+            
         return final or "Agent reached maximum iterations with no final answer."
 
     async def _call_ai(self, system_prompt: str, messages: list) -> Optional[str]:
@@ -251,26 +265,21 @@ class AgentOrchestrator:
             start_idx = text.find(start_char)
             if start_idx == -1:
                 continue
-            # Find the matching closing bracket
-            depth = 0
-            for i in range(start_idx, len(text)):
-                if text[i] == start_char:
-                    depth += 1
-                elif text[i] == end_char:
-                    depth -= 1
-                    if depth == 0:
-                        json_str = text[start_idx:i + 1]
-                        try:
-                            parsed = json.loads(json_str)
-                            if isinstance(parsed, list):
-                                # Validate each item has "tool" key
-                                if all(isinstance(tc, dict) and "tool" in tc for tc in parsed):
-                                    return parsed
-                            elif isinstance(parsed, dict) and "tool" in parsed:
-                                return [parsed]
-                        except json.JSONDecodeError:
-                            pass
-                        break
+            # Find the closest matching closing bracket from the END of the string
+            end_idx = text.rfind(end_char)
+            if end_idx != -1 and end_idx > start_idx:
+                json_str = text[start_idx:end_idx + 1]
+                try:
+                    parsed = json.loads(json_str)
+                    if isinstance(parsed, list):
+                        # Validate each item has "tool" key
+                        valid_calls = [p for p in parsed if isinstance(p, dict) and "tool" in p]
+                        if valid_calls:
+                            return valid_calls
+                    elif isinstance(parsed, dict) and "tool" in parsed:
+                        return [parsed]
+                except json.JSONDecodeError:
+                    pass
 
         return []
 

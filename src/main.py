@@ -33,7 +33,8 @@ HELP_TEXT = """
 
 [bold cyan]Model Management:[/bold cyan]
   [green]/model <name>[/green]        Switch the active model  (e.g. /model nova-lite)
-  [green]/models[/green]              List all available Bedrock models
+  [green]/models[/green]              List curated models
+  [green]/models all[/green]          Interactive wizard to pull ALL AWS Bedrock models
 
 [bold cyan]Quality & Feedback:[/bold cyan]
   [green]/qa [lang][/green]           Run QA checks on the last AI response (default: python)
@@ -41,6 +42,7 @@ HELP_TEXT = """
 
 [bold cyan]Memory & Sessions:[/bold cyan]
   [green]/memory[/green]              Show vector DB status
+  
   [green]/recall <query>[/green]      Semantic search over conversation history
   [green]/save <name>[/green]         Save current session to disk
   [green]/load <name>[/green]         Load a saved session from disk
@@ -65,7 +67,8 @@ async def interactive_mode(executor: Executor):
 
     while True:
         try:
-            prompt_str = f"[magenta]copilot[/magenta][[cyan]{executor.current_model}[/cyan]]> "
+            warning_icon = "" if executor.supports_agent else "[bold yellow]![/bold yellow] "
+            prompt_str = f"{warning_icon}[magenta]copilot[/magenta][[cyan]{executor.current_model}[/cyan]]> "
             user_input = console.input(prompt_str).strip()
 
             if not user_input:
@@ -109,6 +112,14 @@ async def interactive_mode(executor: Executor):
 
             # ── Agent Mode ──────────────────────────────────────────
             elif user_input.startswith("/agent "):
+                if not executor.supports_agent:
+                    console.print(Panel(
+                        "Note: The selected model is excellent for text or code generation, but it lacks autonomous tool-calling capabilities or Bedrock Converse compatibility. Therefore, the [bold yellow]/agent[/bold yellow] mode cannot be used.\n\n[dim]You can still use /ask for normal conversations![/dim]",
+                        title="[yellow]Autonomous Agent Unsupported[/yellow]",
+                        border_style="yellow"
+                    ))
+                    continue
+
                 query = user_input[7:].strip()
                 if not query:
                     console.print("[yellow]Usage:[/yellow] /agent <your request>")
@@ -127,17 +138,77 @@ async def interactive_mode(executor: Executor):
                 if not model_name:
                     console.print("[yellow]Usage:[/yellow] /model <model_name>")
                     continue
-                console.print(executor.set_model(model_name))
+                console.print(await executor.set_model(model_name))
+                if not executor.supports_agent:
+                    console.print(Panel(
+                        "[dim]Note: The selected model does not support autonomous tools, so the /agent command is disabled for this session.[/dim]", 
+                        border_style="yellow"
+                    ))
+
+            elif user_input == "/models all":
+                if not (executor.bedrock and getattr(executor.bedrock, 'available', False)):
+                    console.print("[red]Bedrock connection is unavailable. Cannot fetch all models.[/red]")
+                    continue
+                
+                console.print("[dim]Fetching comprehensive model list from AWS...[/dim]")
+                provider_groups = await executor.bedrock.get_all_grouped_models()
+                
+                if not provider_groups:
+                    console.print("[yellow]No active models found in your AWS region.[/yellow]")
+                    continue
+                    
+                providers = list(provider_groups.keys())
+                providers.sort()
+                
+                console.print("\n[bold cyan]── Base AWS Model Providers ──[/bold cyan]")
+                for i, prov in enumerate(providers, 1):
+                    count = len(provider_groups[prov])
+                    console.print(f"[{i}] {prov} [dim]({count} models)[/dim]")
+                    
+                prov_sel = console.input("\n[green]Select provider number (or enter to cancel): [/green]").strip()
+                if not prov_sel.isdigit() or not (1 <= int(prov_sel) <= len(providers)):
+                    console.print("[dim]Cancelled.[/dim]")
+                    continue
+                    
+                selected_provider = providers[int(prov_sel) - 1]
+                models_list = provider_groups[selected_provider]
+                
+                console.print(f"\n[bold cyan]── {selected_provider} Models ──[/bold cyan]")
+                for i, m in enumerate(models_list, 1):
+                    # Highlight if it's the current model
+                    active_marker = "[bold green]✓[/bold green] " if m["id"] == executor.current_model else "  "
+                    console.print(f"{active_marker}[{i}] {m['id']}")
+                    
+                mod_sel = console.input("\n[green]Select model number to equip (or enter to cancel): [/green]").strip()
+                if not mod_sel.isdigit() or not (1 <= int(mod_sel) <= len(models_list)):
+                    console.print("[dim]Cancelled.[/dim]")
+                    continue
+                    
+                selected_model_id = models_list[int(mod_sel) - 1]["id"]
+                resp = await executor.set_model(selected_model_id)
+                console.print(resp)
+                if not executor.supports_agent:
+                    console.print(Panel(
+                        "[dim]Note: The selected model does not support autonomous tools, so the /agent command is disabled for this session.[/dim]", 
+                        border_style="yellow"
+                    ))
 
             elif user_input == "/models":
-                table = Table(title="Available Models", border_style="cyan")
+                if executor.bedrock and getattr(executor.bedrock, 'available', False):
+                    console.print("[dim]Fetching curated models from AWS...[/dim]")
+                    available_models = await executor.bedrock.get_available_models()
+                else:
+                    available_models = settings.bedrock_models
+
+                table = Table(title="Curated Models", border_style="cyan")
                 table.add_column("Name", style="cyan", no_wrap=True)
                 table.add_column("Model ID", style="dim")
                 table.add_column("Active", justify="center")
-                for name, model_id in settings.bedrock_models.items():
+                for name, model_id in available_models.items():
                     active = "[bold green]✓[/bold green]" if name == executor.current_model else ""
                     table.add_row(name, model_id, active)
                 console.print(table)
+                console.print("[dim]Tip: Try [bold]/models all[/bold] to see the full list of raw AWS models (DeepSeek, Llama, Qwen etc).[/dim]")
 
             # ── Quality & Feedback ──────────────────────────────────
             elif user_input.startswith("/qa"):

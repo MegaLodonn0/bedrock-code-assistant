@@ -78,16 +78,41 @@ class Executor:
 
     def _resolve_model_id(self, model_id: str = None) -> str:
         """Resolve the active model ID string for Bedrock API calls."""
-        return model_id or settings.bedrock_models.get(
-            self.current_model, 'amazon.nova-lite-v1:0'
-        )
+        models = getattr(self.bedrock, "_models_cache", None) or settings.bedrock_models
+        return model_id or models.get(self.current_model, self.current_model)
 
-    def set_model(self, model_name: str) -> str:
+    @property
+    def supports_agent(self) -> bool:
+        """Determines if the current model natively supports Bedrock converse tool use. 
+        Agent works best on Claude, Nova, Mistral Large, Cohere, Llama 3.1+"""
+        models = getattr(self.bedrock, "_models_cache", None) or settings.bedrock_models
+        m_id = models.get(self.current_model, self.current_model).lower()
+        
+        supported_hints = ["claude", "nova", "llama3-1", "llama3-2", "llama3-3", "mistral-large", "command-r"]
+        return any(hint in m_id for hint in supported_hints)
+
+    async def set_model(self, model_name: str) -> str:
         """Switch the active Bedrock model."""
-        models = settings.bedrock_models
+        if self.bedrock and self.bedrock.available:
+            models = await self.bedrock.get_available_models()
+        else:
+            models = settings.bedrock_models
+            
+        # 1. Check if it's a known alias
         if model_name in models:
             self.current_model = model_name
             return f"Model changed to: {model_name} ({models[model_name]})"
+            
+        # 2. Check if it's a valid RAW ID by searching all grouped models
+        if self.bedrock and self.bedrock.available:
+            all_grouped = await self.bedrock.get_all_grouped_models()
+            for provider, m_list in all_grouped.items():
+                if any(m["id"] == model_name for m in m_list):
+                    self.current_model = model_name
+                    # Save it into the active cache so /models shows it
+                    models[model_name] = model_name
+                    return f"Model changed to Raw ID: {model_name} (Provider: {provider})"
+
         available = ', '.join(models.keys())
         return f"Unknown model: '{model_name}'. Available: {available}"
 

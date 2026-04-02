@@ -134,8 +134,25 @@ class ManagedTerminal:
                 )
                 timed_out = False
             except asyncio.TimeoutError:
-                process.kill()
-                stdout_bytes, stderr_bytes = await process.communicate()
+                import sys, subprocess
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True)
+                else:
+                    import os, signal
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except Exception:
+                        pass
+                
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                
+                try:
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    stdout_bytes, stderr_bytes = b"", b"Pipeline blocked. Process forcefully killed."
                 timed_out = True
 
             stdout = stdout_bytes.decode("utf-8", errors="replace")[:self.max_output_chars]
@@ -200,8 +217,25 @@ class ManagedTerminal:
                 )
                 timed_out = False
             except asyncio.TimeoutError:
-                process.kill()
-                stdout_bytes, stderr_bytes = await process.communicate()
+                import sys, subprocess
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True)
+                else:
+                    import os, signal
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except Exception:
+                        pass
+                
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                
+                try:
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    stdout_bytes, stderr_bytes = b"", b"Pipeline blocked. Process forcefully killed."
                 timed_out = True
 
             stdout = stdout_bytes.decode("utf-8", errors="replace")[:self.max_output_chars]
