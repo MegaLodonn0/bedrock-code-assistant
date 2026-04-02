@@ -94,14 +94,21 @@ class SyntaxValidator:
     @staticmethod
     def validate_javascript(code: str) -> QAResult:
         """Validate JavaScript (basic checks)."""
+        import re
         issues = []
         
-        # Check for unmatched brackets
-        if code.count('{') != code.count('}'):
+        # Remove single-line comments, multi-line comments, and strings to avoid false positives
+        # (This is a naive approximation but significantly better than blind bracket counting)
+        clean_code = re.sub(r'//.*', '', code)
+        clean_code = re.sub(r'/\*[\s\S]*?\*/', '', clean_code)
+        clean_code = re.sub(r'(["\'`])(?:(?=(\\?))\2.)*?\1', '', clean_code)
+        
+        # Check for unmatched brackets in the "clean" structure
+        if clean_code.count('{') != clean_code.count('}'):
             issues.append("Unmatched curly braces")
-        if code.count('[') != code.count(']'):
+        if clean_code.count('[') != clean_code.count(']'):
             issues.append("Unmatched square brackets")
-        if code.count('(') != code.count(')'):
+        if clean_code.count('(') != clean_code.count(')'):
             issues.append("Unmatched parentheses")
         
         if issues:
@@ -127,31 +134,34 @@ class FormatValidator:
     
     @staticmethod
     def check_indentation(code: str) -> QAResult:
-        """Check consistent indentation."""
+        """Check consistent indentation (forgiving heuristic)."""
         lines = code.split('\n')
         indent_levels = []
         
         for line in lines:
-            if line.strip():
+            if line.strip() and not line.startswith(('"""', "'''", "#")):
                 spaces = len(line) - len(line.lstrip())
-                indent_levels.append(spaces)
+                if spaces > 0:
+                    indent_levels.append(spaces)
         
-        # Check if indentation is consistent
-        if indent_levels and all(i % 4 == 0 or i % 2 == 0 for i in indent_levels):
-            return QAResult(
-                passed=True,
-                check_name="indentation",
-                message="✅ Indentation consistent",
-                confidence=0.95,
-                severity="info"
-            )
-        
+        # Check if indentation is roughly consistent (at least 75% match 2/4 space indent)
+        if indent_levels:
+            valid_indents = sum(1 for i in indent_levels if i % 4 == 0 or i % 2 == 0)
+            if (valid_indents / len(indent_levels)) < 0.75:
+                return QAResult(
+                    passed=False,
+                    check_name="indentation",
+                    message="⚠️ Indentation appears highly inconsistent",
+                    confidence=0.7,
+                    severity="medium"
+                )
+            
         return QAResult(
-            passed=False,
+            passed=True,
             check_name="indentation",
-            message="⚠️ Indentation inconsistent",
-            confidence=0.7,
-            severity="medium"
+            message="✅ Indentation appears mostly consistent",
+            confidence=0.8,
+            severity="info"
         )
     
     @staticmethod

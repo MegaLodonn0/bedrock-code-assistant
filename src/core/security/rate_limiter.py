@@ -29,11 +29,17 @@ class RateLimiter:
         self.config = config
         self.request_times: deque = deque()
         self.token_counts: deque = deque()
-        self.lock = asyncio.Lock()
-    
+        self._lock: Optional[asyncio.Lock] = None  # lazy — created inside event loop
+
+    def _get_lock(self) -> asyncio.Lock:
+        """Return the asyncio.Lock, creating it lazily inside the running loop."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
     async def acquire(self, tokens: int = 1) -> bool:
         """Acquire rate limit slot."""
-        async with self.lock:
+        async with self._get_lock():
             now = datetime.now()
             minute_ago = now - timedelta(minutes=1)
             

@@ -208,6 +208,5 @@ def create_bedrock_agent_client(profile_name: Optional[str] = None):
     return session.client("bedrock-agent")
 
 
-# Global config
+# Global config instance (validation should happen lazily or at explicit init in main)
 aws_native_config = AWSNativeConfig.from_env()
-aws_native_config.validate()

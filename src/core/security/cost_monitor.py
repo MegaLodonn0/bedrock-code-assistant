@@ -1,4 +1,4 @@
-﻿import json
+import json
 
 class CostMonitor:
     PRICING = {'claude-v3-5-sonnet': {'input': 0.003, 'output': 0.015}, 'nova-micro': {'input': 0.0001, 'output': 0.0004}, 'default': {'input': 0.001, 'output': 0.005}}
@@ -15,4 +15,7 @@ class CostMonitor:
         return cost
 
     def get_summary(self) -> str:
-        return f'[COST] Total Tokens: {self.total_tokens} | Total Est. Cost: '
+        return (
+            f"[COST] Total Tokens: {self.total_tokens} | "
+            f"Total Est. Cost: ${self.total_cost:.6f}"
+        )

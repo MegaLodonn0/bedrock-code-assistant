@@ -1,13 +1,18 @@
-﻿import docker
+import docker
 import os
 from typing import Tuple, List, Optional
 
 class DockerSandbox:
-    def __init__(self, image: str = 'python:3.10-slim'):
+    def __init__(self, image: str = 'python:3.10-slim', user: str = '1000:1000', cap_drop: Optional[List[str]] = None, network_disabled: bool = True):
+        self.user = user
+        self.cap_drop = cap_drop or ['ALL']
+        self.network_disabled = network_disabled
         try:
             self.client = docker.from_env()
             self.image = image
         except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Docker client not initialized: {e}")
             self.client = None
             self.image = image
 
@@ -18,9 +23,12 @@ class DockerSandbox:
             container = self.client.containers.run(
                 self.image,
                 command=['python', '-c', code],
-                network_disabled=True,
+                network_disabled=self.network_disabled,
                 mem_limit=mem_limit,
                 timeout=timeout,
+                user=self.user,
+                cap_drop=self.cap_drop,
+                pids_limit=50,
                 remove=True
             )
             return True, container.decode('utf-8')
