@@ -1,7 +1,7 @@
 """Human feedback loop for interactive agent refinement."""
 
 import logging
-from typing import Optional, List, Tuple, Callable, Awaitable
+from typing import Optional, List, Tuple, Callable, Awaitable, Dict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum

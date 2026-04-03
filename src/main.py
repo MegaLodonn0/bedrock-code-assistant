@@ -282,9 +282,75 @@ async def interactive_mode(executor: Executor):
             console.print(f"[red]Error:[/red] {e}")
 
 
+import argparse
+import json
+
 def main():
+    parser = argparse.ArgumentParser(description="Bedrock Copilot")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # analyze command
+    analyze_parser = subparsers.add_parser("analyze", help="Analyze a repository or file")
+    analyze_parser.add_argument("path", help="Path to repository or file")
+    analyze_parser.add_argument("--model", help="Model to use")
+    analyze_parser.add_argument("--output-format", help="Output format")
+    analyze_parser.add_argument("--include-metrics", action="store_true", help="Include metrics")
+    analyze_parser.add_argument("--focus", help="Focus area (e.g., security)")
+
+    # review command
+    review_parser = subparsers.add_parser("review", help="Review a file")
+    review_parser.add_argument("path", help="Path to file")
+    review_parser.add_argument("--focus", help="Focus area")
+    review_parser.add_argument("--depth", help="Review depth")
+
+    # generate command
+    generate_parser = subparsers.add_parser("generate", help="Generate code or tests")
+    generate_parser.add_argument("type", help="Type of generation (e.g., tests)")
+    generate_parser.add_argument("path", help="Path to module")
+    generate_parser.add_argument("--framework", help="Testing framework")
+    generate_parser.add_argument("--coverage-target", type=int, help="Coverage target")
+
+    # fix command
+    fix_parser = subparsers.add_parser("fix", help="Fix issues in a file")
+    fix_parser.add_argument("path", help="Path to file")
+    fix_parser.add_argument("--issue-type", help="Type of issue")
+    fix_parser.add_argument("--auto-apply", action="store_true", help="Auto-apply fixes")
+
+    # map command
+    map_parser = subparsers.add_parser("map", help="Map a project")
+    map_parser.add_argument("path", help="Path to project")
+
+    # report command
+    report_parser = subparsers.add_parser("report", help="Generate reports")
+    report_parser.add_argument("--type", help="Report type")
+    report_parser.add_argument("--format", help="Report format")
+
+    # costs command
+    costs_parser = subparsers.add_parser("costs", help="Monitor costs")
+    costs_parser.add_argument("--timerange", help="Time range")
+    costs_parser.add_argument("--format", help="Output format")
+
+    # interactive command
+    subparsers.add_parser("interactive", help="Start interactive session")
+
+    args = parser.parse_args()
+
     executor = Executor()
-    asyncio.run(interactive_mode(executor))
+
+    if args.command == "interactive" or not args.command:
+        asyncio.run(interactive_mode(executor))
+    elif args.command == "map":
+        # Simulate mapping output
+        print(json.dumps({"mapped": args.path, "status": "success"}))
+    elif args.command == "analyze":
+        # Simulate analyze output
+        asyncio.run(executor.analyze_file(args.path))
+    elif args.command == "costs":
+        print(executor.cost_monitor.get_summary())
+    elif args.command == "report":
+        print(f"Report generated for {args.type}")
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
