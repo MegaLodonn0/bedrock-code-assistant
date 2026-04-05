@@ -306,7 +306,7 @@ python src/main.py analyze /path/to/repo
 
 3. Deploy and run (no env vars needed):
    ```bash
-   git clone https://github.com/your-org/bedrock-copilot.git
+   git clone https://github.com/MegaLodonn0/bedrock-copilot.git
    cd bedrock-copilot
    pip install -r requirements.txt
    python src/main.py analyze /path/to/repo
