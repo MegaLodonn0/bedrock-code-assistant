@@ -11,3 +11,5 @@ __pycache__/
 .idea/
 .aider*
 .claude*
+data/*
+!data/.gitkeep
