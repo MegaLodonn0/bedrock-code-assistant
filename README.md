@@ -123,7 +123,7 @@ python src/main.py analyze /path/to/repo --model claude-3-5-sonnet
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/your-org/bedrock-copilot.git
+git clone https://github.com/MegaLodonn0/bedrock-copilot.git
 cd bedrock-copilot
 ```
 
