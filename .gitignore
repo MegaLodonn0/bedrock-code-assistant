@@ -13,3 +13,4 @@ __pycache__/
 .claude*
 data/*
 !data/.gitkeep
+real-life-copilot/
