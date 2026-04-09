@@ -15,6 +15,6 @@ data/*
 !data/.gitkeep
 real-life-copilot/
 rl_copilot_structure.md
-
 real_life_copilot_architecture_map.md
+rl_copilot_full_file_map.md
 
