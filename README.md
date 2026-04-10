@@ -35,7 +35,7 @@
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-org/bedrock-copilot.git
+git clone https://github.com/MegaLodonn0/bedrock-copilot.git
 cd bedrock-copilot
 
 # 2. Install dependencies
