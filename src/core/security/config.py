@@ -1,201 +1,240 @@
-import os
+"""
+BedrockHardened — hardened AWS Bedrock client with ModelRegistry integration.
+
+Changes vs. previous version:
+- get_available_models() now calls registry.merge_from_aws() so live AWS IDs
+  are registered without duplicates.
+- get_all_grouped_models() delegates to registry.grouped_by_provider() for
+  catalog models and falls back to raw AWS data for unknown IDs.
+- Removed unused `tenacity` import.
+"""
+
+import asyncio
 import logging
+import os
+
 import boto3
-import json
+from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from botocore.exceptions import ClientError, BotoCoreError
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+
 class AWSSecurity:
+    """Minimal AWS session factory with credential-chain support."""
+
     @staticmethod
-    def get_session(profile_name=None):
-        profile = profile_name or os.getenv('AWS_PROFILE')
-        region = os.getenv('AWS_REGION', 'us-east-1')
-        
-        # Try direct credentials first from .env
-        access_key = os.getenv('AWS_ACCESS_KEY_ID')
-        secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-        
+    def get_session(profile_name: str = None) -> boto3.Session:
+        profile = profile_name or os.getenv("AWS_PROFILE")
+        region = os.getenv("AWS_REGION", "us-east-1")
+
+        access_key = os.getenv("AWS_ACCESS_KEY_ID")
+        secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+
         if access_key and secret_key:
-            # Use direct credentials
             return boto3.Session(
                 aws_access_key_id=access_key,
                 aws_secret_access_key=secret_key,
-                region_name=region
+                region_name=region,
             )
-        elif profile:
-            # Fall back to profile
+        if profile:
             return boto3.Session(profile_name=profile, region_name=region)
-        else:
-            # Default session (credential chain)
-            return boto3.Session(region_name=region or 'us-east-1')
+        return boto3.Session(region_name=region or "us-east-1")
+
 
 class BedrockHardened:
-    def __init__(self, profile_name=None):
-        self.available = False
-        self.session = None
+    """
+    AWS Bedrock runtime client wrapper.
+
+    Integrates with ModelRegistry for model discovery and pricing.
+    Silently falls back to mock mode when credentials are unavailable.
+    """
+
+    def __init__(self, profile_name: str = None) -> None:
+        self.available: bool = False
+        self.session: boto3.Session = None
         self.client = None
-        self._models_cache = None
+        # Cache: alias→aws_id dict returned to callers
+        self._models_cache: dict = None
+
         try:
-            # Try to create session but don't fail if credentials missing
             self.session = AWSSecurity.get_session(profile_name)
-            # Only mark as available if we can create client
-            self.client = self.session.client('bedrock-runtime', region_name='us-east-1')
+            self.client = self.session.client("bedrock-runtime", region_name="us-east-1")
             self.available = True
-        except Exception as e:
-            logger.debug(f"Bedrock not available: {e}")
-            # Silently fail - we'll use mock mode
+        except Exception as exc:
+            logger.debug("Bedrock not available: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Model discovery
+    # ------------------------------------------------------------------
 
     async def get_available_models(self) -> dict:
-        """Dynamically fetch Bedrock models the user has access to from AWS.
-        Falls back to settings.bedrock_models if the list API fails or is blocked."""
+        """
+        Return the alias→aws_id mapping for models available in this account.
+
+        Strategy:
+        1. Query AWS for live model IDs.
+        2. Pass them to registry.merge_from_aws() (registers unknown IDs).
+        3. Filter the registry to only return IDs confirmed live by AWS.
+        4. Fall back to full registry export if the API call fails.
+        """
         from src.config.settings import settings
-        import asyncio
-        
+
         if not self.available or not self.session:
             return settings.bedrock_models
 
         if self._models_cache is not None:
             return self._models_cache
 
-        def _fetch():
+        def _fetch() -> dict:
             try:
-                # The control plane client (differs from bedrock-runtime)
-                bedrock_control = self.session.client('bedrock', region_name='us-east-1')
-                raw_ids = set()
-                
-                # 1. Fetch Foundation Models (must support ON_DEMAND)
+                registry = settings.registry
+                bedrock_control = self.session.client("bedrock", region_name="us-east-1")
+                raw_ids: set = set()
+
                 try:
                     fm_resp = bedrock_control.list_foundation_models(byOutputModality="TEXT")
                     for fn in fm_resp.get("modelSummaries", []):
                         if "ON_DEMAND" in fn.get("inferenceTypesSupported", []):
                             raw_ids.add(fn["modelId"])
-                except Exception as e:
-                    logger.debug(f"Failed to fetch foundation models: {e}")
+                except Exception as exc:
+                    logger.debug("Failed to fetch foundation models: %s", exc)
 
-                # 2. Fetch Inference Profiles (Cross-Region)
                 try:
-                    prof_resp = bedrock_control.list_inference_profiles(typeEquals="SYSTEM_DEFINED")
+                    prof_resp = bedrock_control.list_inference_profiles(
+                        typeEquals="SYSTEM_DEFINED"
+                    )
                     for prof in prof_resp.get("inferenceProfileSummaries", []):
                         raw_ids.add(prof["inferenceProfileId"])
-                except Exception as e:
-                    logger.debug(f"Failed to fetch inference profiles: {e}")
+                except Exception as exc:
+                    logger.debug("Failed to fetch inference profiles: %s", exc)
 
                 if not raw_ids:
                     raise RuntimeError("No active models or profiles fetched from AWS.")
 
-                # 3. Intersection mapping: Match fetched physical IDs with our human-readable settings aliases
-                filtered_models = {}
-                for alias, aws_id in settings.bedrock_models.items():
-                    if aws_id in raw_ids:
-                        filtered_models[alias] = aws_id
-                
-                if not filtered_models:
-                    filtered_models = settings.bedrock_models
-                return filtered_models
-            except Exception as e:
-                logger.debug(f"Dynamic model resolution failed, falling back to defaults: {e}")
-                return settings.bedrock_models
+                # Register any unknown IDs so they appear in the registry
+                registry.merge_from_aws(list(raw_ids))
 
-        # Run the blocking boto3 calls in a thread pool to avoid freezing the app
+                # Return only catalog entries whose AWS ID was confirmed live
+                full = registry.to_dict()
+                filtered = {
+                    alias: aws_id
+                    for alias, aws_id in full.items()
+                    if aws_id in raw_ids
+                }
+                return filtered if filtered else full
+
+            except Exception as exc:
+                logger.debug(
+                    "Dynamic model resolution failed, falling back to defaults: %s", exc
+                )
+                from src.config.settings import settings as s
+                return s.bedrock_models
+
         self._models_cache = await asyncio.to_thread(_fetch)
         return self._models_cache
 
     async def get_all_grouped_models(self) -> dict:
-        """Fetches all raw models and cross-region profiles from Bedrock 
-        and groups them by their Provider Name."""
-        import asyncio
-        from collections import defaultdict
-        
-        if not self.available or not self.session:
-            return {}
+        """
+        Return all Bedrock models grouped by provider.
 
-        def _fetch_all():
-            grouped = defaultdict(list)
+        Combines catalog entries (from the registry) with raw AWS data so
+        that models available in the account but not in the catalog also appear.
+        """
+        from src.config.settings import settings
+
+        if not self.available or not self.session:
+            return settings.registry.grouped_by_provider()
+
+        def _fetch_all() -> dict:
+            from collections import defaultdict
+            grouped: dict = defaultdict(list)
+
             try:
-                bedrock_control = self.session.client('bedrock', region_name='us-east-1')
-                
-                # Fetch Foundation Models (Filtered for ON_DEMAND text)
+                bedrock_control = self.session.client("bedrock", region_name="us-east-1")
+
                 fm_resp = bedrock_control.list_foundation_models(byOutputModality="TEXT")
                 for fn in fm_resp.get("modelSummaries", []):
-                    if "ON_DEMAND" in fn.get("inferenceTypesSupported", []):
-                        provider = fn.get("providerName", "Unknown")
-                        if provider.lower() == "deepseek": provider = "DeepSeek"
-                        elif provider.lower() == "mistral" or provider.lower() == "mistral ai": provider = "Mistral AI"
-                        elif provider.lower() == "twelvelabs": provider = "TwelveLabs"
-                        elif provider.lower() == "z.ai": provider = "Z.AI"
-                        
-                        item = {"id": fn["modelId"], "name": fn.get("modelName", fn["modelId"])}
-                        grouped[provider].append(item)
+                    if "ON_DEMAND" not in fn.get("inferenceTypesSupported", []):
+                        continue
+                    provider = _normalise_provider_name(fn.get("providerName", "Unknown"))
+                    grouped[provider].append(
+                        {"id": fn["modelId"], "name": fn.get("modelName", fn["modelId"])}
+                    )
 
-                # Fetch Inference Profiles
-                prof_resp = bedrock_control.list_inference_profiles(typeEquals="SYSTEM_DEFINED")
+                prof_resp = bedrock_control.list_inference_profiles(
+                    typeEquals="SYSTEM_DEFINED"
+                )
                 for prof in prof_resp.get("inferenceProfileSummaries", []):
                     prof_id = prof["inferenceProfileId"]
-                    parts = prof_id.split('.')
-                    provider = "Unknown"
-                    if len(parts) >= 2:
-                        prov_str = parts[1].lower()
-                        if prov_str == "anthropic": provider = "Anthropic"
-                        elif prov_str == "amazon": provider = "Amazon"
-                        elif prov_str == "meta": provider = "Meta"
-                        elif prov_str == "cohere": provider = "Cohere"
-                        elif prov_str == "mistral": provider = "Mistral AI"
-                        elif prov_str == "deepseek": provider = "DeepSeek"
-                        elif prov_str == "twelvelabs": provider = "TwelveLabs"
-                        else: provider = parts[1].capitalize()
-                    
-                    item = {"id": prof_id, "name": prof.get("inferenceProfileName", prof_id)}
-                    grouped[provider].append(item)
+                    parts = prof_id.split(".")
+                    provider = parts[1].capitalize() if len(parts) >= 2 else "Unknown"
+                    provider = _normalise_provider_name(provider)
+                    grouped[provider].append(
+                        {"id": prof_id, "name": prof.get("inferenceProfileName", prof_id)}
+                    )
 
-            except Exception as e:
-                logger.debug(f"Failed to fetch grouped models: {e}")
+            except Exception as exc:
+                logger.debug("Failed to fetch grouped models: %s", exc)
+                return settings.registry.grouped_by_provider()
 
             return dict(grouped)
 
-        # Execute off-thread
         return await asyncio.to_thread(_fetch_all)
 
+    # ------------------------------------------------------------------
+    # Inference
+    # ------------------------------------------------------------------
 
-    def invoke(self, model_id, prompt, **kwargs):
+    def invoke(self, model_id: str, prompt: str) -> str:
+        """Call Bedrock Converse API with a single-turn user prompt."""
         if not self.available or not self.client:
             raise RuntimeError("Bedrock not configured")
-        
+
         try:
-            # Use messages format with proper parameters for Bedrock Converse API
             response = self.client.converse(
                 modelId=model_id,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [{"text": prompt}]
-                    }
-                ],
-                inferenceConfig={
-                    "maxTokens": 2048,
-                    "temperature": 0.7
-                }
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig={"maxTokens": 2048, "temperature": 0.7},
             )
-            
-            # Extract text from response
             if "output" in response and "message" in response["output"]:
                 content = response["output"]["message"].get("content", [])
                 if content and isinstance(content, list):
                     return content[0].get("text", "")
-            
             return ""
-        except Exception as e:
-            raise RuntimeError(f"Bedrock error: {e}")
+        except Exception as exc:
+            raise RuntimeError(f"Bedrock error: {exc}") from exc
+
 
 class AWSCredentialChain:
+    """Utility to validate that AWS credentials are resolvable."""
+
     @staticmethod
-    def validate():
+    def validate() -> bool:
         try:
             return AWSSecurity.get_session().get_credentials() is not None
-        except Exception as e:
-            logger.error(f"Credential validation failed: {e}")
+        except Exception as exc:
+            logger.error("Credential validation failed: %s", exc)
             return False
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+def _normalise_provider_name(raw: str) -> str:
+    """Map raw provider strings from AWS to canonical display names."""
+    mapping = {
+        "anthropic": "Anthropic",
+        "amazon": "Amazon",
+        "meta": "Meta",
+        "cohere": "Cohere",
+        "mistral": "Mistral AI",
+        "mistral ai": "Mistral AI",
+        "deepseek": "DeepSeek",
+        "twelvelabs": "TwelveLabs",
+        "z.ai": "Z.AI",
+    }
+    return mapping.get(raw.lower(), raw)

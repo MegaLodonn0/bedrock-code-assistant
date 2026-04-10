@@ -225,12 +225,16 @@ class AgentOrchestrator:
                 if content and isinstance(content, list):
                     text = content[0].get("text", "")
 
-                    # Track cost
+                    # Track cost using registry pricing
                     usage = response.get("usage", {})
                     input_tokens = usage.get("inputTokens", 0)
                     output_tokens = usage.get("outputTokens", 0)
+                    from src.core.mapping.registry import get_registry
+                    in_cost, out_cost = get_registry().get_pricing(resolved_model_id)
                     self.executor.cost_monitor.update(
-                        resolved_model_id, input_tokens, output_tokens
+                        input_tokens, output_tokens,
+                        input_cost_per_1k=in_cost,
+                        output_cost_per_1k=out_cost,
                     )
                     return text
 

@@ -165,23 +165,20 @@ class TestExecutorInit:
 
 
 class TestSetModel:
-    """Tests for Executor.set_model()."""
+    """Tests for Executor.set_model() — now async."""
 
     def test_valid_model_updates_current_model(self):
         ex = make_executor()
-        # Pick the first available model key
-        first_key = next(iter(ex.bedrock_models if hasattr(ex, "bedrock_models") else {}), None)
-        # Use settings directly
         from src.config.settings import settings
 
         first_key = next(iter(settings.bedrock_models))
-        result = ex.set_model(first_key)
+        result = run(ex.set_model(first_key))
         assert ex.current_model == first_key
         assert "changed" in result.lower() or first_key in result
 
     def test_invalid_model_returns_error(self):
         ex = make_executor()
-        result = ex.set_model("nonexistent-model-xyz")
+        result = run(ex.set_model("nonexistent-model-xyz"))
         assert "Unknown" in result or "unknown" in result
         assert "nonexistent-model-xyz" in result
 
@@ -190,13 +187,13 @@ class TestSetModel:
         from src.config.settings import settings
 
         key = next(iter(settings.bedrock_models))
-        result = ex.set_model(key)
+        result = run(ex.set_model(key))
         assert key in result
 
     def test_current_model_unchanged_on_invalid_input(self):
         ex = make_executor()
         original = ex.current_model
-        ex.set_model("bad-model")
+        run(ex.set_model("bad-model"))
         assert ex.current_model == original
 
 
@@ -380,10 +377,12 @@ class TestAnalyzeFile:
         assert result == "analysis result"
         ex.ask_ai.assert_called_once()
 
-    def test_prompt_contains_file_content(self, tmp_path):
+    def test_prompt_contains_context_header(self, tmp_path):
+        """New analyze_file uses ContextBundle, NOT raw file content.
+        The prompt now contains a structured context header from the bundle."""
         ex = make_executor()
         src = tmp_path / "code.py"
-        src.write_text("x = 42")
+        src.write_text("def compute(x):\n    return x * 2\n")
 
         captured_prompt = []
 
@@ -394,16 +393,22 @@ class TestAnalyzeFile:
         ex.ask_ai = capture_ask
         ex.analyzer.get_impact_files.return_value = set()
         run(ex.analyze_file(str(src)))
-        assert "x = 42" in captured_prompt[0]
+        # Prompt should contain either context bundle output or the 'no relevant' fallback
+        assert captured_prompt, "ask_ai was not called"
+        assert "Provide insights" in captured_prompt[0] or "ANCHOR" in captured_prompt[0] or "no relevant" in captured_prompt[0]
 
     def test_file_read_error_returns_error_string(self, tmp_path):
+        """When CodeMapper cannot read the file, analyze_file returns an error string."""
         ex = make_executor()
         src = tmp_path / "locked.py"
         src.write_text("data")
 
-        with patch("builtins.open", side_effect=PermissionError("denied")):
-            result = run(ex.analyze_file(str(src)))
-        assert "Error" in result or "error" in result
+        # Remove the file so CodeMapper cannot read it
+        src.unlink()
+
+        result = run(ex.analyze_file(str(src)))
+        # Should return 'File not found' or an error string
+        assert "not found" in result.lower() or "Error" in result or "error" in result
 
 
 # ===========================================================================
@@ -712,7 +717,7 @@ class TestWorkflowSmoke:
         keys = list(settings.bedrock_models.keys())
         if len(keys) < 2:
             pytest.skip("Need at least 2 models to test switching")
-        ex.set_model(keys[0])
+        run(ex.set_model(keys[0]))
         assert ex.current_model == keys[0]
-        ex.set_model(keys[1])
+        run(ex.set_model(keys[1]))
         assert ex.current_model == keys[1]

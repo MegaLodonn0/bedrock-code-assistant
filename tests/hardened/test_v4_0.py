@@ -17,6 +17,7 @@ def test_dependency_analyzer():
 
 def test_cost_monitor():
     monitor = CostMonitor()
-    cost = monitor.update('claude-v3-5-sonnet', 1000, 1000)
-    assert cost == (0.003 + 0.015)
+    # New signature: update(input_tokens, output_tokens, input_cost_per_1k, output_cost_per_1k)
+    cost = monitor.update(1000, 1000, input_cost_per_1k=0.003, output_cost_per_1k=0.015)
+    assert cost == pytest.approx(0.018)
     assert abs(monitor.total_cost - 0.018) < 0.0001
