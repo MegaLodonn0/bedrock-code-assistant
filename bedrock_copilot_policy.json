@@ -18,7 +18,11 @@
     {
       "Sid": "DenyDangerous",
       "Effect": "Deny",
-      "Action": ["iam:*", "kms:*", "sts:AssumeRole"],
+      "Action": [
+        "iam:*",
+        "kms:*",
+        "sts:AssumeRole"
+      ],
       "Resource": "*"
     }
   ]

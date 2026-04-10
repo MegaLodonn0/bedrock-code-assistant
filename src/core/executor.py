@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 
 from src.config.settings import settings
+from src.core.mapping.registry import get_registry
 from src.core.security.config import BedrockHardened
 from src.core.security.docker_sandbox import DockerSandbox
 from src.core.security.hitl_gate import HITLGate
@@ -15,6 +16,7 @@ from src.core.features.agent_qa import AgentQA, AgentOutput, get_agent_qa
 from src.core.features.agent_feedback import get_feedback_loop
 from src.core.storage.vector_memory_db import get_vector_db
 from src.core.storage.thread_safety import get_file_locker
+from src.core.code_map import get_code_mapper
 
 logger = logging.getLogger(__name__)
 
@@ -78,43 +80,47 @@ class Executor:
 
     def _resolve_model_id(self, model_id: str = None) -> str:
         """Resolve the active model ID string for Bedrock API calls."""
-        models = getattr(self.bedrock, "_models_cache", None) or settings.bedrock_models
-        return model_id or models.get(self.current_model, self.current_model)
+        registry = get_registry()
+        key = model_id or self.current_model
+        return registry.resolve_safe(key)
 
     @property
     def supports_agent(self) -> bool:
-        """Determines if the current model natively supports Bedrock converse tool use. 
-        Agent works best on Claude, Nova, Mistral Large, Cohere, Llama 3.1+"""
-        models = getattr(self.bedrock, "_models_cache", None) or settings.bedrock_models
-        m_id = models.get(self.current_model, self.current_model).lower()
-        
-        supported_hints = ["claude", "nova", "llama3-1", "llama3-2", "llama3-3", "mistral-large", "command-r"]
-        return any(hint in m_id for hint in supported_hints)
+        """
+        Return True if the current model supports Bedrock Converse tool-use.
+        Delegates to ModelRegistry which checks the ModelEntry first, then
+        falls back to a heuristic over the AWS ID string.
+        """
+        registry = get_registry()
+        return registry.supports_agent(self.current_model)
 
     async def set_model(self, model_name: str) -> str:
-        """Switch the active Bedrock model."""
-        if self.bedrock and self.bedrock.available:
-            models = await self.bedrock.get_available_models()
-        else:
-            models = settings.bedrock_models
-            
-        # 1. Check if it's a known alias
-        if model_name in models:
+        """Switch the active Bedrock model by alias or raw AWS ID."""
+        registry = get_registry()
+
+        # 1. Known alias or raw AWS ID already in the registry
+        if model_name in registry:
             self.current_model = model_name
-            return f"Model changed to: {model_name} ({models[model_name]})"
-            
-        # 2. Check if it's a valid RAW ID by searching all grouped models
+            resolved = registry.resolve_safe(model_name)
+            return f"Model changed to: {model_name} ({resolved})"
+
+        # 2. Try to pull it from AWS (adds it to registry via merge_from_aws)
         if self.bedrock and self.bedrock.available:
             all_grouped = await self.bedrock.get_all_grouped_models()
-            for provider, m_list in all_grouped.items():
-                if any(m["id"] == model_name for m in m_list):
-                    self.current_model = model_name
-                    # Save it into the active cache so /models shows it
-                    models[model_name] = model_name
-                    return f"Model changed to Raw ID: {model_name} (Provider: {provider})"
+            all_live_ids = {
+                m["id"] for models in all_grouped.values() for m in models
+            }
+            if model_name in all_live_ids:
+                registry.register_raw(model_name, model_name, overwrite=True)
+                self.current_model = model_name
+                return f"Model changed to raw ID: {model_name}"
 
-        available = ', '.join(models.keys())
-        return f"Unknown model: '{model_name}'. Available: {available}"
+        # 3. Not found — suggest similar models
+        suggestions = registry.suggest(model_name, limit=3)
+        hint = (
+            f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
+        )
+        return f"Unknown model: '{model_name}'.{hint} Use /models to list available models."
 
     # ─────────────────────────────────────────────
     # AI Core
@@ -147,11 +153,14 @@ class Executor:
                 self.bedrock.invoke, resolved_model_id, query
             )
 
-            # Track token cost
+            # Track token cost using registry pricing
+            registry = get_registry()
+            in_cost, out_cost = registry.get_pricing(resolved_model_id)
             self.cost_monitor.update(
-                resolved_model_id,
                 len(query.split()) * 1.3,
-                len(response.split()) * 1.3
+                len(response.split()) * 1.3,
+                input_cost_per_1k=in_cost,
+                output_cost_per_1k=out_cost,
             )
 
             # PII / Secret Scanning before Vector DB Persistence (Data Privacy Risk Fix)
@@ -187,29 +196,69 @@ class Executor:
     # File Analysis
     # ─────────────────────────────────────────────
 
-    async def analyze_file(self, filepath: str) -> str:
-        """Analyze a source code file and return AI-generated insights."""
+    async def analyze_file(self, filepath: str, symbol: Optional[str] = None) -> str:
+        """
+        Analyze a source code file using the CodeMap context engine.
+
+        Instead of sending the entire file to Bedrock, we:
+        1. Parse the file with tree-sitter (multi-language)
+        2. Build a dependency sub-graph around *symbol* (or the whole file)
+        3. Send only the minimum relevant context (80–95% token reduction)
+
+        Parameters
+        ----------
+        filepath:
+            Path to the source file to analyse.
+        symbol:
+            Optional specific function/class name to focus on.
+            When provided, context is centred on that symbol and its callers/callees.
+        """
         import asyncio
         try:
             if not os.path.exists(filepath):
                 return f"File not found: {filepath}"
-                
-            def _read_file():
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    return f.read()
-                    
-            # BUG-05 fix: Parallelise I/O (file read) and CPU-bound AST checking
-            content_task = asyncio.to_thread(_read_file)
-            impact_task = asyncio.to_thread(self.analyzer.get_impact_files, filepath)
-            
-            content, impact = await asyncio.gather(content_task, impact_task)
-            prompt = (
-                f"Analyze this code:\n\n{content}\n\n"
-                f"It affects these files: {impact}\n\n"
-                "Provide insights and suggest improvements."
+
+            # Build the query from the symbol hint (or generic)
+            query = (
+                f"Explain the {symbol} symbol and how it works"
+                if symbol else
+                f"Analyze this code file and provide insights and improvements"
             )
+
+            # Index file + get context in a thread (CPU-bound parse)
+            code_mapper = get_code_mapper()
+
+            def _build_context():
+                return code_mapper.get_context(
+                    file=filepath,
+                    symbol=symbol,
+                    query=query,
+                    depth=2,
+                    token_budget=2000,
+                )
+
+            # Run the context build in parallel with the legacy impact analysis
+            ctx_task    = asyncio.to_thread(_build_context)
+            impact_task = asyncio.to_thread(self.analyzer.get_impact_files, filepath)
+            bundle, impact = await asyncio.gather(ctx_task, impact_task)
+
+            # Build compact prompt using the context bundle
+            prompt = (
+                f"{bundle.to_prompt()}\n\n"
+                f"Dependency impact: {impact}\n\n"
+                f"Provide insights and suggest improvements for the code above."
+            )
+
+            logger.info(
+                "analyze_file %s: %s (raw file would be ~%d tokens)",
+                filepath,
+                bundle.summary(),
+                (os.path.getsize(filepath) // 4),
+            )
+
             return await self.ask_ai(prompt)
         except Exception as e:
+            logger.debug("analyze_file error: %s", e)
             return f"Error analyzing file: {e}"
 
     # ─────────────────────────────────────────────
