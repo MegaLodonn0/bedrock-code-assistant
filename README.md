@@ -212,30 +212,30 @@ Create `src/config/config.json`:
 #### 1. Analyze a Repository
 ```bash
 python src/main.py analyze /path/to/repo \
-  --model claude-3-5-sonnet \
-  --output-format json \
-  --include-metrics
+  -model claude-3-5-sonnet \
+  -output-format json \
+  -include-metrics
 ```
 
 #### 2. Code Review
 ```bash
 python src/main.py review /path/to/file.py \
-  --focus security \
-  --depth deep
+  -focus security \
+  -depth deep
 ```
 
 #### 3. Generate Tests
 ```bash
 python src/main.py generate tests /path/to/module \
-  --framework pytest \
-  --coverage-target 80
+  -framework pytest \
+  -coverage-target 80
 ```
 
 #### 4. Fix Issues
 ```bash
 python src/main.py fix /path/to/file.py \
-  --issue-type security \
-  --auto-apply
+  -issue-type security \
+  -auto-apply
 ```
 
 #### 5. Interactive Session
@@ -254,13 +254,13 @@ python src/main.py interactive
 python src/main.py map /path/to/project > project_map.json
 
 # 2. Analyze security
-python src/main.py analyze /path/to/project --focus security
+python src/main.py analyze /path/to/project -focus security
 
 # 3. Generate reports
-python src/main.py report --type security --format html
+python src/main.py report -type security -format html
 
 # 4. Monitor costs
-python src/main.py costs --timerange 7days
+python src/main.py costs -timerange 7days
 ```
 
 ---
@@ -288,13 +288,13 @@ python src/main.py analyze /path/to/repo
 1. Create an IAM role with `bedrock_copilot_policy.json`:
    ```bash
    aws iam create-role --role-name BedrockCopilotRole \
-     --assume-role-policy-document file://trust_policy.json
+     -assume-role-policy-document file://trust_policy.json
    
    aws iam create-policy --policy-name BedrockCopilotPolicy \
-     --policy-document file://bedrock_copilot_policy.json
+     -policy-document file://bedrock_copilot_policy.json
    
    aws iam attach-role-policy --role-name BedrockCopilotRole \
-     --policy-arn arn:aws:iam::ACCOUNT-ID:policy/BedrockCopilotPolicy
+     -policy-arn arn:aws:iam::ACCOUNT-ID:policy/BedrockCopilotPolicy
    ```
 
 2. Attach role to EC2 instance:
@@ -583,10 +583,7 @@ We welcome contributions! Please see `CONTRIBUTING.md` for guidelines.
 
 ## 📞 Contact & Support
 
-- 📧 **Email**: support@your-org.com
-- 🐦 **Twitter**: [@BedrockCopilot](https://twitter.com/your-org)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-org/bedrock-copilot/discussions)
-- 🐛 **Report Bug**: [GitHub Issues](https://github.com/your-org/bedrock-copilot/issues)
+
 
 ---
 
