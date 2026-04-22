@@ -22,24 +22,10 @@
           New Chat
         </button>
 
-        <!-- Chat search (find in current chat messages) -->
-        <div class="expand-search" id="chatSearchWrap">
-          <button class="expand-search-trigger" id="chatSearchTrigger">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            Find in chat
-          </button>
-          <div class="expand-search-panel" id="chatSearchPanel">
-            <input type="text" id="chatSearchInput" placeholder="Find in chat..." />
-            <span class="expand-search-nav" id="chatSearchNav"></span>
-            <button class="expand-search-close" id="chatSearchClose">&times;</button>
-          </div>
-        </div>
-
         <!-- Session search (filter sidebar conversations) -->
         <div class="expand-search" id="sessionSearchWrap">
-          <button class="expand-search-trigger" id="sessionSearchTrigger">
+          <button class="expand-search-trigger" id="sessionSearchTrigger" title="Search sessions">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            Search sessions
           </button>
           <div class="expand-search-panel" id="sessionSearchPanel">
             <input type="text" id="sessionSearchInput" placeholder="Search sessions..." />
@@ -70,6 +56,18 @@
           </button>
           <span class="chat-title">Bedrock Copilot</span>
           <span class="chat-model-tag" id="headerModelTag">nova-lite</span>
+
+          <!-- Chat search (find in current chat messages) -->
+          <div class="expand-search" id="chatSearchWrap" style="margin-left: 10px;">
+            <button class="expand-search-trigger" id="chatSearchTrigger" title="Find in chat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </button>
+            <div class="expand-search-panel" id="chatSearchPanel">
+              <input type="text" id="chatSearchInput" placeholder="Find in chat..." />
+              <span class="expand-search-nav" id="chatSearchNav"></span>
+              <button class="expand-search-close" id="chatSearchClose">&times;</button>
+            </div>
+          </div>
         </div>
         <div class="chat-header-right">
           <button class="toggle-info-btn" id="toggleInfoBtn" title="Info Panel (Ctrl+I)">
@@ -116,33 +114,141 @@
     <!-- ═══ INFO PANEL ════════════════════════════════════════ -->
     <aside class="info-panel" id="infoPanel">
       <div class="info-header">System Info</div>
+
+      <!-- STATUS -->
       <div class="info-section">
         <div class="info-section-title">Status</div>
         <div class="info-row"><span class="label">Connection</span><span class="value"><span class="status-dot online" id="statusDot"></span><span id="statusText">Online</span></span></div>
         <div class="info-row"><span class="label">Model</span><span class="value" id="infoModel">nova-lite</span></div>
         <div class="info-row"><span class="label">Agent</span><span class="value" id="infoAgent">Yes</span></div>
       </div>
+
+      <!-- MODEL CONFIGURATION -->
+      <div class="info-section config-section">
+        <div class="info-section-title">Model Configuration</div>
+
+        <!-- System Prompt -->
+        <div class="config-row" style="margin-bottom:8px">
+          <div class="config-label" style="margin-bottom:4px">System Prompt</div>
+          <textarea class="config-textarea" id="cfgSystemPrompt"
+            placeholder="You are a helpful coding assistant..."></textarea>
+          <button class="config-apply-btn" id="cfgSystemPromptApply">Apply</button>
+        </div>
+
+        <!-- Temperature -->
+        <div class="config-row">
+          <div class="config-row-header">
+            <span class="config-label">Temperature</span>
+            <span class="config-value-badge" id="cfgTempVal">0.70</span>
+          </div>
+          <input type="range" class="config-slider" id="cfgTemp"
+            min="0" max="1" step="0.05" value="0.7" />
+        </div>
+
+        <!-- Max Output Tokens -->
+        <div class="config-row">
+          <div class="config-row-header">
+            <span class="config-label">Max Output Tokens</span>
+            <span class="config-value-badge" id="cfgMaxTokVal">2048</span>
+          </div>
+          <input type="range" class="config-slider" id="cfgMaxTok"
+            min="256" max="8192" step="256" value="2048" />
+        </div>
+
+        <!-- Top P -->
+        <div class="config-row">
+          <div class="config-row-header">
+            <span class="config-label">Top P</span>
+            <span class="config-value-badge" id="cfgTopPVal">0.90</span>
+          </div>
+          <input type="range" class="config-slider" id="cfgTopP"
+            min="0" max="1" step="0.05" value="0.9" />
+        </div>
+
+        <!-- Stop Sequences -->
+        <div class="config-row" style="margin-bottom:0">
+          <div class="config-label" style="margin-bottom:4px">Stop Sequences <span style="color:var(--text-muted);font-weight:400">(comma-separated)</span></div>
+          <input type="text" class="config-stop-input" id="cfgStopSeq"
+            placeholder='e.g.  ###, <end>' />
+        </div>
+      </div>
+
+      <!-- RATE LIMITS (writable) -->
+      <div class="info-section config-section">
+        <div class="info-section-title">Rate Limits</div>
+
+        <!-- RPM slider -->
+        <div class="config-row">
+          <div class="config-row-header">
+            <span class="config-label">Requests / min (RPM)</span>
+            <span class="config-value-badge" id="cfgRpmVal">30</span>
+          </div>
+          <input type="range" class="config-slider" id="cfgRpm"
+            min="1" max="100" step="1" value="30" />
+          <div class="config-meter-row">
+            <div class="config-meter-bar">
+              <div class="config-meter-fill" id="cfgRpmMeter" style="width:0%"></div>
+            </div>
+            <span class="config-meter-label"><span id="cfgRpmUsed">0</span> used</span>
+          </div>
+        </div>
+
+        <!-- TPM slider -->
+        <div class="config-row">
+          <div class="config-row-header">
+            <span class="config-label">Tokens / min (TPM)</span>
+            <span class="config-value-badge" id="cfgTpmVal">40000</span>
+          </div>
+          <input type="range" class="config-slider" id="cfgTpm"
+            min="1000" max="200000" step="1000" value="40000" />
+          <div class="config-meter-row">
+            <div class="config-meter-bar">
+              <div class="config-meter-fill" id="cfgTpmMeter" style="width:0%"></div>
+            </div>
+            <span class="config-meter-label"><span id="cfgTpmUsed">0</span> used</span>
+          </div>
+        </div>
+
+        <!-- Retry Attempts -->
+        <div class="config-row">
+          <div class="config-row-header">
+            <span class="config-label">Retry Attempts</span>
+            <span class="config-value-badge" id="cfgRetriesVal">3</span>
+          </div>
+          <input type="range" class="config-slider" id="cfgRetries"
+            min="0" max="10" step="1" value="3" />
+        </div>
+
+        <!-- Backoff Base -->
+        <div class="config-row" style="margin-bottom:0">
+          <div class="config-row-header">
+            <span class="config-label">Backoff Base (ms)</span>
+            <span class="config-value-badge" id="cfgBackoffVal">100</span>
+          </div>
+          <input type="range" class="config-slider" id="cfgBackoff"
+            min="50" max="5000" step="50" value="100" />
+        </div>
+      </div>
+
+      <!-- USAGE -->
       <div class="info-section">
         <div class="info-section-title">Usage</div>
         <div class="info-row"><span class="label">Tokens</span><span class="value" id="infoTokens">0</span></div>
         <div class="info-row"><span class="label">Cost</span><span class="value" id="infoCost">$0.000000</span></div>
       </div>
-      <div class="info-section">
-        <div class="info-section-title">Rate Limit</div>
-        <div class="info-row"><span class="label">RPM</span><span class="value"><span id="infoRpm">0</span> / <span id="infoRpmLimit">30</span></span></div>
-        <div class="meter"><div class="meter-fill" id="rpmMeter" style="width:0%"></div></div>
-        <div class="info-row" style="margin-top:6px"><span class="label">TPM</span><span class="value"><span id="infoTpm">0</span> / <span id="infoTpmLimit">40000</span></span></div>
-        <div class="meter"><div class="meter-fill" id="tpmMeter" style="width:0%"></div></div>
-      </div>
+
+      <!-- MEMORY -->
       <div class="info-section">
         <div class="info-section-title">Memory</div>
         <div style="display:flex;gap:6px">
-          <input type="text" id="recallInput" placeholder="Search memory..." style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--text-primary);font-family:var(--font);font-size:12px;outline:none;" />
+          <input type="text" id="recallInput" placeholder="Search memory..."
+            style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--text-primary);font-family:var(--font);font-size:12px;outline:none;" />
           <button class="btn btn-primary" style="padding:5px 10px;font-size:11px" id="recallBtn">Go</button>
         </div>
-        <div id="recallResults" style="margin-top:6px;font-size:11px;color:var(--text-secondary);max-height:180px;overflow-y:auto"></div>
+        <div id="recallResults" style="margin-top:6px;font-size:11px;color:var(--text-secondary);max-height:100px;overflow-y:auto"></div>
       </div>
     </aside>
+
   </div>
 
   <!-- Modals -->

@@ -188,17 +188,34 @@ class BedrockHardened:
     # Inference
     # ------------------------------------------------------------------
 
-    def invoke(self, model_id: str, prompt: str) -> str:
-        """Call Bedrock Converse API with a single-turn user prompt."""
+    def invoke(self, model_id: str, prompt: str, *,
+               system_prompt: str = "",
+               temperature: float = 0.7,
+               max_tokens: int = 2048,
+               top_p: float = 0.9,
+               stop_sequences: list = None) -> str:
+        """Call Bedrock Converse API with configurable inference parameters."""
         if not self.available or not self.client:
             raise RuntimeError("Bedrock not configured")
 
         try:
-            response = self.client.converse(
-                modelId=model_id,
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
-                inferenceConfig={"maxTokens": 2048, "temperature": 0.7},
-            )
+            kwargs = {
+                "modelId": model_id,
+                "messages": [{"role": "user", "content": [{"text": prompt}]}],
+                "inferenceConfig": {
+                    "maxTokens": max_tokens,
+                    "temperature": temperature,
+                    "topP": top_p,
+                },
+            }
+
+            if stop_sequences:
+                kwargs["inferenceConfig"]["stopSequences"] = stop_sequences
+
+            if system_prompt:
+                kwargs["system"] = [{"text": system_prompt}]
+
+            response = self.client.converse(**kwargs)
             if "output" in response and "message" in response["output"]:
                 content = response["output"]["message"].get("content", [])
                 if content and isinstance(content, list):

@@ -1,7 +1,7 @@
 /**
- * Bedrock Copilot — Client Application v2.1
+ * Bedrock Copilot — Client Application v2.2
  * ==========================================
- * Bug fixes: chat search freeze, expandable search bars, resizable panels
+ * Added: technical config panel (inference params + rate limit sliders)
  */
 
 // ─── Globals ──────────────────────────────────────────────────
@@ -9,6 +9,7 @@ let agentMode = false;
 let isStreaming = false;
 let currentSessionName = null;
 let allSessionsCache = [];
+let currentAgentSessionId = null;   // active HITL session
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
@@ -25,7 +26,9 @@ const acPanel        = $("#autocompletePanel");
 document.addEventListener("DOMContentLoaded", async () => {
   await refreshStatus();
   await loadSessions();
+  await loadConfig();
   setupEventListeners();
+  setupConfigPanel();
   setupResizableHandles();
   chatInput.focus();
 });
@@ -87,12 +90,132 @@ function updateStatusUI(d) {
 function updateUsageUI(u) {
   $("#infoTokens").textContent = (u.tokens || 0).toLocaleString();
   $("#infoCost").textContent = u.cost_fmt || "$0.000000";
-  $("#infoRpm").textContent = u.rpm || 0;
-  $("#infoRpmLimit").textContent = u.rpm_limit || 30;
-  $("#infoTpm").textContent = u.tpm || 0;
-  $("#infoTpmLimit").textContent = u.tpm_limit || 40000;
-  $("#rpmMeter").style.width = Math.min(100, ((u.rpm||0)/(u.rpm_limit||30))*100) + "%";
-  $("#tpmMeter").style.width = Math.min(100, ((u.tpm||0)/(u.tpm_limit||40000))*100) + "%";
+
+  // Update config panel RPM/TPM meters
+  const rpmUsed = u.rpm || 0;
+  const rpmLimit = u.rpm_limit || 30;
+  const tpmUsed = u.tpm || 0;
+  const tpmLimit = u.tpm_limit || 40000;
+
+  const rpmEl = $("#cfgRpmUsed"); if (rpmEl) rpmEl.textContent = rpmUsed;
+  const tpmEl = $("#cfgTpmUsed"); if (tpmEl) tpmEl.textContent = tpmUsed.toLocaleString();
+  const rpmM = $("#cfgRpmMeter"); if (rpmM) rpmM.style.width = Math.min(100, (rpmUsed/rpmLimit)*100) + "%";
+  const tpmM = $("#cfgTpmMeter"); if (tpmM) tpmM.style.width = Math.min(100, (tpmUsed/tpmLimit)*100) + "%";
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONFIG PANEL
+// ═══════════════════════════════════════════════════════════════
+let configSaveTimer = null;
+
+async function loadConfig() {
+  try {
+    const data = await (await fetch("/api/config")).json();
+    applyConfigToUI(data);
+  } catch(e) { console.warn("Config load failed", e); }
+}
+
+function applyConfigToUI(data) {
+  const m = data.model || {};
+  const rl = data.rate_limit || {};
+
+  // Model config
+  const sp = $("#cfgSystemPrompt");
+  if (sp) sp.value = m.system_prompt || "";
+
+  setSlider("cfgTemp",    "cfgTempVal",    m.temperature ?? 0.7,   v => v.toFixed(2));
+  setSlider("cfgMaxTok",  "cfgMaxTokVal",  m.max_tokens ?? 2048,   v => v.toString());
+  setSlider("cfgTopP",    "cfgTopPVal",    m.top_p ?? 0.9,         v => v.toFixed(2));
+
+  const ss = $("#cfgStopSeq");
+  if (ss) ss.value = (m.stop_sequences || []).join(", ");
+
+  // Rate limit config
+  setSlider("cfgRpm",     "cfgRpmVal",     rl.rpm ?? 30,           v => v.toString());
+  setSlider("cfgTpm",     "cfgTpmVal",     rl.tpm ?? 40000,        v => v.toLocaleString());
+  setSlider("cfgRetries", "cfgRetriesVal", rl.max_retries ?? 3,    v => v.toString());
+  setSlider("cfgBackoff", "cfgBackoffVal", rl.base_wait_ms ?? 100, v => v + "ms");
+}
+
+function setSlider(sliderId, badgeId, value, fmt) {
+  const sl = $("#" + sliderId);
+  const bd = $("#" + badgeId);
+  if (!sl || !bd) return;
+  sl.value = value;
+  bd.textContent = fmt(Number(value));
+  updateSliderFill(sl);
+}
+
+function updateSliderFill(slider) {
+  const min = parseFloat(slider.min);
+  const max = parseFloat(slider.max);
+  const val = parseFloat(slider.value);
+  const pct = ((val - min) / (max - min)) * 100;
+  slider.style.background = `linear-gradient(to right, var(--accent) ${pct}%, rgba(255,255,255,0.06) ${pct}%)`;
+}
+
+async function postConfig(body) {
+  try {
+    await fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch(e) { console.warn("Config save failed", e); }
+}
+
+function debounceConfig(body) {
+  clearTimeout(configSaveTimer);
+  configSaveTimer = setTimeout(() => postConfig(body), 400);
+}
+
+function setupConfigPanel() {
+  // Helper to wire a slider
+  function wireSlider(sliderId, badgeId, fmt, configKey, parseVal) {
+    const sl = $("#" + sliderId);
+    const bd = $("#" + badgeId);
+    if (!sl || !bd) return;
+
+    updateSliderFill(sl);
+
+    sl.addEventListener("input", () => {
+      const v = parseVal(sl.value);
+      bd.textContent = fmt(v);
+      updateSliderFill(sl);
+      bd.classList.remove("saved");
+      debounceConfig({ [configKey]: v });
+      // Flash badge on next tick
+      setTimeout(() => { bd.classList.add("saved"); setTimeout(() => bd.classList.remove("saved"), 600); }, 410);
+    });
+  }
+
+  wireSlider("cfgTemp",    "cfgTempVal",    v => v.toFixed(2), "temperature",  v => parseFloat(v));
+  wireSlider("cfgMaxTok",  "cfgMaxTokVal",  v => v.toString(), "max_tokens",   v => parseInt(v));
+  wireSlider("cfgTopP",    "cfgTopPVal",    v => v.toFixed(2), "top_p",         v => parseFloat(v));
+  wireSlider("cfgRpm",     "cfgRpmVal",     v => v.toString(), "rpm",           v => parseInt(v));
+  wireSlider("cfgTpm",     "cfgTpmVal",     v => v.toLocaleString(), "tpm",     v => parseInt(v));
+  wireSlider("cfgRetries", "cfgRetriesVal", v => v.toString(), "max_retries",  v => parseInt(v));
+  wireSlider("cfgBackoff", "cfgBackoffVal", v => v + "ms",     "base_wait_ms", v => parseInt(v));
+
+  // System prompt Apply button
+  const applyBtn = $("#cfgSystemPromptApply");
+  if (applyBtn) {
+    applyBtn.addEventListener("click", async () => {
+      const val = $("#cfgSystemPrompt").value;
+      await postConfig({ system_prompt: val });
+      applyBtn.textContent = "Applied!";
+      setTimeout(() => applyBtn.textContent = "Apply", 1500);
+    });
+  }
+
+  // Stop sequences blur (save on blur)
+  const stopEl = $("#cfgStopSeq");
+  if (stopEl) {
+    stopEl.addEventListener("blur", () => {
+      const seqs = stopEl.value.split(",").map(s => s.trim()).filter(Boolean);
+      postConfig({ stop_sequences: seqs });
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -186,10 +309,59 @@ async function sendMessage() {
         if (p === "[DONE]") continue;
         try {
           const ev = JSON.parse(p);
-          if (ev.type === "thinking") thinkingEl.querySelector(".thinking-text").textContent = ev.content;
-          else if (ev.type === "response") { thinkingEl.remove(); appendMessage("ai", ev.content); }
-          else if (ev.type === "error") { thinkingEl.remove(); appendMessage("ai", "Error: " + ev.content); }
-          else if (ev.type === "usage") updateUsageUI(ev);
+
+          if (ev.type === "session_id") {
+            currentAgentSessionId = ev.id;
+
+          } else if (ev.type === "thinking") {
+            // Legacy thinking — update the spinner text
+            updateThinking(thinkingEl, ev.content);
+
+          } else if (ev.type === "workflow_start") {
+            // Agent just kicked off
+            appendWorkflowStart(ev.query || msg);
+            updateThinking(thinkingEl, "🤖 Agent initializing...");
+
+          } else if (ev.type === "agent_thinking") {
+            // Silently update spinner — no separate card
+            updateThinking(thinkingEl, `🤔 Reasoning... step ${ev.step}/${ev.max_steps}`);
+
+          } else if (ev.type === "agent_plan") {
+            // Pass step info so it appears inline right-aligned on the plan row
+            appendAgentPlan(ev.step, ev.max_steps, ev.tools);
+
+          } else if (ev.type === "agent_done") {
+            // All steps complete
+            updateThinking(thinkingEl, "✅ Agent finished.");
+
+          } else if (ev.type === "action") {
+            appendActionRow(ev);
+
+          } else if (ev.type === "file_preview") {
+            appendFilePreview(ev);
+
+          } else if (ev.type === "hitl_file") {
+            appendHitlFileCard(ev);
+            updateThinking(thinkingEl, "⏳ Waiting for your approval...");
+
+          } else if (ev.type === "hitl_cmd") {
+            appendHitlCmdCard(ev);
+            updateThinking(thinkingEl, "⏳ Waiting for your approval...");
+
+          } else if (ev.type === "terminal_output") {
+            appendTerminalBlock(ev);
+
+          } else if (ev.type === "response") {
+            thinkingEl.remove();
+            appendMessage("ai", ev.content);
+
+          } else if (ev.type === "error") {
+            thinkingEl.remove();
+            appendMessage("ai", "❌ Error: " + ev.content);
+
+          } else if (ev.type === "usage") {
+            updateUsageUI(ev);
+          }
         } catch (_) {}
       }
     }
@@ -260,6 +432,222 @@ function appendThinking() {
   return el;
 }
 
+function updateThinking(el, text) {
+  const t = el && el.querySelector(".thinking-text");
+  if (t) t.textContent = text;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AGENT WORKFLOW UI
+// ═══════════════════════════════════════════════════════════════
+
+function appendWorkflowStart(query) {
+  const el = document.createElement("div");
+  el.className = "workflow-start";
+  const short = query.length > 80 ? query.slice(0, 80) + "…" : query;
+  el.innerHTML = `
+    <span class="workflow-start-icon">🤖</span>
+    <span class="workflow-start-text">${esc(short)}</span>
+    <span class="workflow-badge">Agent</span>`;
+  chatMessages.appendChild(el);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// appendAgentStep removed — step info is now shown inline on the agent_plan row
+
+function appendAgentPlan(step, maxSteps, tools) {
+  if (!tools || tools.length === 0) return;
+  const el = document.createElement("div");
+  el.className = "agent-plan-card";
+  const chips = tools.map(t => `<span class="plan-tool-chip">${esc(t)}</span>`).join("");
+  const stepTag = step ? `<span class="plan-step-tag">step ${step}${maxSteps ? `/${maxSteps}` : ""}</span>` : "";
+  el.innerHTML = `<span class="plan-label">🔧 Using:</span>${chips}${stepTag}`;
+  chatMessages.appendChild(el);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function appendFilePreview(ev) {
+  const block = document.createElement("div");
+  block.className = "file-preview-block";
+  const path = ev.path || "";
+  const lines = ev.lines || 0;
+  const content = ev.content || "";
+
+  // Render with line numbers
+  const numbered = content.split("\n").map((line, i) => {
+    const n = String(i + 1).padStart(3, " ");
+    return `<span class="file-preview-line-num">${n}</span>${esc(line)}`;
+  }).join("\n");
+
+  block.innerHTML = `
+    <div class="file-preview-header">
+      <span style="font-size:13px">📄</span>
+      <span class="file-preview-path">${esc(path)}</span>
+      <span class="file-preview-meta">${lines} lines</span>
+    </div>
+    <div class="file-preview-body">${numbered}</div>`;
+
+  chatMessages.appendChild(block);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function appendActionRow(ev) {
+  const row = document.createElement("div");
+  row.className = "action-row";
+  const statusClass = ev.pending ? "pending" : (ev.ok ? "ok" : "fail");
+  const ms = ev.ms ? `${ev.ms}ms` : "";
+  const hint = ev.hint ? esc(String(ev.hint).split(/[\\/]/).pop()) : "";
+  row.innerHTML = `
+    <span class="action-status ${statusClass}"></span>
+    <span class="action-icon">${esc(ev.icon || "🔧")}</span>
+    <span class="action-label">${esc(ev.label || ev.tool)}</span>
+    <span class="action-hint">${hint}</span>
+    <span class="action-ms">${ms}</span>`;
+  chatMessages.appendChild(row);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return row;
+}
+
+function appendHitlFileCard(ev) {
+  const card = document.createElement("div");
+  card.className = "hitl-card";
+  const isNew = ev.is_new_file;
+  const filepath = ev.filepath || "file";
+  const badge = isNew ? "New file" : "Modified";
+  const uid = Date.now();
+
+  card.innerHTML = `
+    <div class="hitl-header">
+      <span class="hitl-header-icon">${isNew ? "✍️" : "📝"}</span>
+      <span class="hitl-header-title"><strong>${esc(filepath)}</strong></span>
+      <span class="hitl-header-badge">${badge}</span>
+    </div>
+    <div class="diff-viewer">${renderLineDiff(ev.diff || "")}</div>
+    <div class="hitl-actions">
+      <button class="hitl-btn approve" id="hitl-approve-${uid}">✅ Save changes</button>
+      <button class="hitl-btn reject"  id="hitl-reject-${uid}">❌ Discard</button>
+    </div>`;
+
+  chatMessages.appendChild(card);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  const btns = card.querySelectorAll(".hitl-btn");
+  btns.forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const decision = btn.classList.contains("approve") ? "approve" : "reject";
+      btns.forEach(b => b.disabled = true);
+      await sendAgentDecision(decision);
+      card.className = "hitl-card " + (decision === "approve" ? "approved" : "rejected");
+      card.querySelector(".hitl-actions").innerHTML =
+        `<span style="font-size:12px;color:var(--text-muted)">${decision === "approve" ? "✅ Saved to disk" : "❌ Discarded"}</span>`;
+    });
+  });
+
+  return card;
+}
+
+function appendHitlCmdCard(ev) {
+  const card = document.createElement("div");
+  card.className = "hitl-card";
+  const ctx = ev.context ? `<div class="hitl-context">Reason: ${esc(ev.context)}</div>` : "";
+
+  card.innerHTML = `
+    <div class="hitl-header">
+      <span class="hitl-header-icon">⚡</span>
+      <span class="hitl-header-title">Terminal Command</span>
+      <span class="hitl-header-badge">Approval Required</span>
+    </div>
+    <div class="hitl-command">$ ${esc(ev.command || "")}</div>
+    ${ctx}
+    <div class="hitl-actions">
+      <button class="hitl-btn approve">▶ Run command</button>
+      <button class="hitl-btn reject">✕ Cancel</button>
+    </div>`;
+
+  chatMessages.appendChild(card);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  const btns = card.querySelectorAll(".hitl-btn");
+  btns.forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const decision = btn.classList.contains("approve") ? "approve" : "reject";
+      btns.forEach(b => b.disabled = true);
+      await sendAgentDecision(decision);
+      card.className = "hitl-card " + (decision === "approve" ? "approved" : "rejected");
+      card.querySelector(".hitl-actions").innerHTML =
+        `<span style="font-size:12px;color:var(--text-muted)">${decision === "approve" ? "▶ Executing..." : "✕ Cancelled"}</span>`;
+    });
+  });
+
+  return card;
+}
+
+function appendTerminalBlock(ev) {
+  const block = document.createElement("div");
+  block.className = "terminal-block";
+  const okClass  = ev.ok ? "ok" : "fail";
+  const exitLabel = ev.ok ? "exit 0" : "exit ≠ 0";
+  const stdout = ev.stdout || "(no output)";
+  const stderr = ev.stderr || "";
+  const ms = ev.ms || 0;
+
+  // Colorise common output patterns
+  function colorise(text) {
+    return text.split("\n").map(line => {
+      const l = line.toLowerCase();
+      if (/^error[:\s]|traceback|exception:|failed/i.test(line))
+        return `<span class="t-error">${esc(line)}</span>`;
+      if (/warning[:\s]|warn:/i.test(line))
+        return `<span class="t-warn">${esc(line)}</span>`;
+      if (/^ok$|passed|success/i.test(line))
+        return `<span class="t-success">${esc(line)}</span>`;
+      return esc(line);
+    }).join("\n");
+  }
+
+  block.innerHTML = `
+    <div class="terminal-header">
+      <div class="terminal-dots">
+        <div class="terminal-dot red"></div>
+        <div class="terminal-dot yellow"></div>
+        <div class="terminal-dot green"></div>
+      </div>
+      <span class="terminal-cmd">$ ${esc(ev.command || "")}</span>
+      <span class="terminal-exit ms">${ms}ms</span>
+      <span class="terminal-exit ${okClass}">${exitLabel}</span>
+    </div>
+    <div class="terminal-body">${colorise(stdout)}</div>
+    ${stderr ? `<div class="terminal-stderr">${esc(stderr)}</div>` : ""}`;
+
+  chatMessages.appendChild(block);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return block;
+}
+
+function renderLineDiff(diffText) {
+  if (!diffText) return '<div class="diff-line context"><span class="diff-content">(no changes)</span></div>';
+  return diffText.split("\n").map(line => {
+    let cls = "context", sign = " ";
+    if (line.startsWith("+++") || line.startsWith("---")) { cls = "header"; sign = line[0]; }
+    else if (line.startsWith("@@")) { cls = "header"; sign = "@"; }
+    else if (line.startsWith("+")) { cls = "added";   sign = "+"; }
+    else if (line.startsWith("-")) { cls = "removed"; sign = "-"; }
+    const content = esc(line.slice(sign === " " ? 0 : 1));
+    return `<div class="diff-line ${cls}"><span class="diff-sign">${sign}</span><span class="diff-content">${content}</span></div>`;
+  }).join("");
+}
+
+async function sendAgentDecision(decision) {
+  if (!currentAgentSessionId) return;
+  try {
+    await fetch("/api/agent/respond", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ session_id: currentAgentSessionId, decision }),
+    });
+  } catch(e) { console.warn("HITL respond failed", e); }
+}
+
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 // ═══════════════════════════════════════════════════════════════
@@ -292,7 +680,7 @@ function openSlashPalette(query) {
   acItems = filtered;
   acIndex = 0;
   renderAutocomplete("Commands", filtered.map(c => ({
-    icon: "/", label: c.cmd, desc: c.desc, badge: c.args || "", value: c.cmd,
+    icon: "/", label: c.cmd.substring(1), desc: c.desc, badge: c.args || "", value: c.cmd,
   })));
 }
 

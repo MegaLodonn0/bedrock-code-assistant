@@ -11,6 +11,7 @@ import os
 import json
 import asyncio
 import logging
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -53,6 +54,24 @@ class RecallRequest(BaseModel):
     query: str
     n: int = 3
 
+class AgentRespondRequest(BaseModel):
+    session_id: str
+    decision: str  # "approve" | "reject"
+
+
+# ─── Runtime Model Config (mutable) ──────────────────────────────
+model_config = {
+    "system_prompt": "",
+    "temperature": 0.7,
+    "max_tokens": 2048,
+    "top_p": 0.9,
+    "stop_sequences": [],
+}
+
+# ─── Agent Session State ───────────────────────────────────
+# Per-request state for streaming agent sessions (HITL approval bridge)
+_agent_sessions: dict = {}
+
 
 # ─── Serve Main Page ─────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
@@ -89,14 +108,58 @@ async def chat(req: ChatRequest):
                     yield "data: [DONE]\n\n"
                     return
 
+                from src.core.agent.orchestrator import AgentOrchestrator
+                from src.core.security.hitl_gate import WebHITLGate
+
+                session_id = str(uuid.uuid4())
+                event_queue: asyncio.Queue = asyncio.Queue()
+                web_hitl = WebHITLGate(event_queue)
+                orchestrator = AgentOrchestrator(executor)
+
+                # Start agent in background so SSE can drain the queue concurrently
+                agent_task = asyncio.create_task(
+                    orchestrator.run(
+                        req.message,
+                        event_queue=event_queue,
+                        web_hitl_gate=web_hitl,
+                    )
+                )
+                _agent_sessions[session_id] = {
+                    "hitl": web_hitl,
+                    "task": agent_task,
+                    "queue": event_queue,
+                }
+
+                # Publish session_id to frontend first
+                yield f"data: {json.dumps({'type': 'session_id', 'id': session_id})}\n\n"
                 yield f"data: {json.dumps({'type': 'thinking', 'content': '🤖 Agent mode — reasoning and executing tools...'})}\n\n"
-                response = await executor.ask_agent(req.message)
+
+                # Drain queue until agent task completes
+                while not agent_task.done() or not event_queue.empty():
+                    try:
+                        event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
+                        yield f"data: {json.dumps(event)}\n\n"
+                    except asyncio.TimeoutError:
+                        continue
+                    except Exception:
+                        break
+
+                # Get final result
+                try:
+                    response = await agent_task
+                except Exception as e:
+                    response = f"Agent error: {e}"
+
+                # Clean up session
+                _agent_sessions.pop(session_id, None)
 
             elif req.mode == "analyze":
                 yield f"data: {json.dumps({'type': 'thinking', 'content': '📂 Reading and analyzing file...'})}\n\n"
                 response = await executor.analyze_file(req.message)
 
             else:
+                # Pass runtime config params to invoke via a patched call
+                _patch_invoke_config()
                 response = await executor.ask_ai(req.message)
 
             # Send final response
@@ -119,6 +182,42 @@ async def chat(req: ChatRequest):
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ─── Agent HITL Respond ───────────────────────────────────────────
+@app.post("/api/agent/respond")
+async def agent_respond(req: AgentRespondRequest):
+    """
+    Resolve a pending HITL approval for an active agent session.
+    Called by the browser when user clicks Approve or Reject.
+    """
+    session = _agent_sessions.get(req.session_id)
+    if not session:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No active agent session: {req.session_id}"}
+        )
+
+    decision = req.decision.lower()
+    if decision not in ("approve", "reject"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "decision must be 'approve' or 'reject'"}
+        )
+
+    session["hitl"].resolve(decision)
+    return {"ok": True, "session_id": req.session_id, "decision": decision}
+
+
+@app.get("/api/agent/sessions")
+async def list_agent_sessions():
+    """Return currently active agent sessions (for debugging)."""
+    return {
+        "sessions": [
+            {"id": sid, "done": sess["task"].done()}
+            for sid, sess in _agent_sessions.items()
+        ]
+    }
 
 
 # ─── Models ───────────────────────────────────────────────────────
@@ -156,6 +255,87 @@ async def set_model(req: ModelRequest):
         "model": executor.current_model,
         "supports_agent": executor.supports_agent,
     }
+
+
+# ─── Config (runtime model parameters) ──────────────────────────
+@app.get("/api/config")
+async def get_config():
+    rl = executor.rate_limiter
+    rp = executor.retry_policy
+    return {
+        "model": model_config.copy(),
+        "rate_limit": {
+            "rpm": rl.config.requests_per_minute,
+            "tpm": rl.config.tokens_per_minute,
+            "max_retries": rp.max_retries,
+            "base_wait_ms": rp.base_wait_ms,
+        },
+    }
+
+
+class ConfigUpdate(BaseModel):
+    system_prompt: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    top_p: Optional[float] = None
+    stop_sequences: Optional[list] = None
+    rpm: Optional[int] = None
+    tpm: Optional[int] = None
+    max_retries: Optional[int] = None
+    base_wait_ms: Optional[int] = None
+
+
+@app.post("/api/config")
+async def update_config(req: ConfigUpdate):
+    # Model inference config
+    if req.system_prompt is not None:
+        model_config["system_prompt"] = req.system_prompt
+    if req.temperature is not None:
+        model_config["temperature"] = max(0.0, min(1.0, req.temperature))
+    if req.max_tokens is not None:
+        model_config["max_tokens"] = max(256, min(8192, req.max_tokens))
+    if req.top_p is not None:
+        model_config["top_p"] = max(0.0, min(1.0, req.top_p))
+    if req.stop_sequences is not None:
+        model_config["stop_sequences"] = req.stop_sequences[:5]  # max 5
+
+    # Rate limit config
+    rl_updates = {}
+    if req.rpm is not None:
+        rl_updates["rpm"] = max(1, min(100, req.rpm))
+    if req.tpm is not None:
+        rl_updates["tpm"] = max(1000, min(200000, req.tpm))
+    if req.max_retries is not None:
+        rl_updates["max_retries"] = max(0, min(10, req.max_retries))
+    if req.base_wait_ms is not None:
+        rl_updates["base_wait_ms"] = max(50, min(5000, req.base_wait_ms))
+    if rl_updates:
+        executor.rate_limiter.update_config(**rl_updates)
+        if req.max_retries is not None:
+            executor.retry_policy.max_retries = rl_updates.get("max_retries", executor.retry_policy.max_retries)
+        if req.base_wait_ms is not None:
+            executor.retry_policy.base_wait_ms = rl_updates.get("base_wait_ms", executor.retry_policy.base_wait_ms)
+
+    return {"message": "Config updated", "config": await get_config()}
+
+
+def _patch_invoke_config():
+    """Monkey-patch the bedrock invoke to use current model_config values."""
+    if executor.bedrock and executor.bedrock.available:
+        original_invoke = executor.bedrock.__class__.invoke
+        cfg = model_config.copy()
+
+        def patched_invoke(self, model_id, prompt, **kwargs):
+            return original_invoke(
+                self, model_id, prompt,
+                system_prompt=cfg.get("system_prompt", ""),
+                temperature=cfg.get("temperature", 0.7),
+                max_tokens=cfg.get("max_tokens", 2048),
+                top_p=cfg.get("top_p", 0.9),
+                stop_sequences=cfg.get("stop_sequences") or None,
+            )
+
+        executor.bedrock.invoke = lambda mid, prompt, **kw: patched_invoke(executor.bedrock, mid, prompt, **kw)
 
 
 # ─── Sessions ────────────────────────────────────────────────────
@@ -346,4 +526,4 @@ if __name__ == "__main__":
     print("\n  * Bedrock Copilot Web UI")
     print(f"  -> http://localhost:8000")
     print(f"  -> Model: {executor.current_model}\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=5000, log_level="info")
