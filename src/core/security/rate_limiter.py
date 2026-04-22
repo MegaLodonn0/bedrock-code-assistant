@@ -95,6 +95,17 @@ class RateLimiter:
             "tpm_remaining": self.config.tokens_per_minute - tokens,
         }
 
+    def update_config(self, rpm=None, tpm=None, max_retries=None, base_wait_ms=None):
+        """Update rate limiter configuration at runtime."""
+        if rpm is not None:
+            self.config.requests_per_minute = int(rpm)
+        if tpm is not None:
+            self.config.tokens_per_minute = int(tpm)
+        if max_retries is not None:
+            self.config.max_retries = int(max_retries)
+        if base_wait_ms is not None:
+            self.config.base_wait_ms = int(base_wait_ms)
+
 
 class RetryPolicy:
     """Retry with exponential backoff."""
