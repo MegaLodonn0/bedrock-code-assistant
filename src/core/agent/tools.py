@@ -46,8 +46,74 @@ class ToolDefinition:
 # Built-in tool implementations
 # ─────────────────────────────────────────────────────────────────
 
-async def tool_read_file(path: str) -> ToolResult:
-    """Read and return the contents of a file."""
+# Files with more lines than this threshold return an OUTLINE instead
+# of full content when start_line/end_line are not specified.
+OUTLINE_THRESHOLD = 150
+
+
+def _build_outline(path: str, lines: list) -> str:
+    """
+    Return a structural outline of a file with line numbers.
+    Python files are parsed with ast for accurate signatures.
+    Other file types fall back to regex heuristics.
+    """
+    total = len(lines)
+    header = (
+        f"[OUTLINE: {path} — {total} lines]\n"
+        f"File is too large to return in full. "
+        f"Use read_file(path, start_line=N, end_line=M) to read a specific section, "
+        f"or read_symbol(symbol, path) for a named function/class (Python only).\n\n"
+    )
+
+    entries: list = []  # list of (lineno, kind, label)
+
+    if path.endswith(".py"):
+        try:
+            import ast as _ast
+            source = "\n".join(lines)
+            tree = _ast.parse(source)
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.ClassDef):
+                    entries.append((node.lineno, "class", f"class {node.name}:"))
+                elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    prefix = "async def" if isinstance(node, _ast.AsyncFunctionDef) else "def"
+                    args = []
+                    for a in node.args.args:
+                        args.append(a.arg)
+                    sig = f"{prefix} {node.name}({', '.join(args)})"
+                    entries.append((node.lineno, "  fn", sig))
+        except SyntaxError:
+            pass  # fall through to regex below
+
+    if not entries:
+        _patterns = [
+            (re.compile(r'^\s*(class|interface|struct)\s+(\w+)'), "class"),
+            (re.compile(r'^\s*(async\s+)?def\s+(\w+)'),           "  fn"),
+            (re.compile(r'^\s*(async\s+)?function\s+(\w+)'),      "  fn"),
+            (re.compile(r'^\s*(export\s+)?(default\s+)?(const|let|var)\s+(\w+)\s*=\s*(async\s+)?[({]'), "  fn"),
+        ]
+        for i, line in enumerate(lines, 1):
+            for pat, kind in _patterns:
+                if pat.match(line):
+                    entries.append((i, kind, line.strip()[:80]))
+                    break
+
+    entries.sort(key=lambda x: x[0])
+    body = "\n".join(f"  L{lineno:<5} {kind}  {label}" for lineno, kind, label in entries)
+    return header + (body if body else "(no recognizable structure found)")
+
+
+async def tool_read_file(
+    path: str,
+    start_line: int = None,
+    end_line: int = None,
+) -> ToolResult:
+    """
+    Read file contents.
+    - With start_line/end_line: returns only that range (1-indexed, inclusive).
+    - Without range on a file > OUTLINE_THRESHOLD lines: returns an OUTLINE.
+    - Without range on a small file: returns full content.
+    """
     start = time.time()
     try:
         abs_path = os.path.abspath(path)
@@ -60,10 +126,10 @@ async def tool_read_file(path: str) -> ToolResult:
 
         # Safety: reject binary / huge files
         size = os.path.getsize(abs_path)
-        if size > 512_000:  # 500 KB
+        if size > 512_000:  # 500 KB hard cap
             return ToolResult(
                 "read_file", False, "",
-                f"File too large ({size:,} bytes). Max 500 KB.",
+                f"File too large ({size:,} bytes). Use search_code to locate relevant sections first.",
                 (time.time() - start) * 1000,
             )
 
@@ -72,6 +138,30 @@ async def tool_read_file(path: str) -> ToolResult:
                 return f.read()
 
         content = await asyncio.to_thread(_read)
+        lines = content.splitlines()
+        total_lines = len(lines)
+
+        # ── Line-range mode ───────────────────────────────────────
+        if start_line is not None or end_line is not None:
+            s = max(0, (start_line or 1) - 1)            # convert to 0-indexed
+            e = min(total_lines, end_line or total_lines)  # inclusive end
+            selected = lines[s:e]
+            out = "\n".join(selected)
+            return ToolResult(
+                "read_file", True,
+                f"[Lines {s + 1}–{e} of {total_lines} | {path}]\n{out}",
+                execution_time_ms=(time.time() - start) * 1000,
+            )
+
+        # ── Large file: return outline instead of full content ────
+        if total_lines > OUTLINE_THRESHOLD:
+            outline = _build_outline(path, lines)
+            return ToolResult(
+                "read_file", True, outline,
+                execution_time_ms=(time.time() - start) * 1000,
+            )
+
+        # ── Small file: return full content ───────────────────────
         return ToolResult("read_file", True, content,
                           execution_time_ms=(time.time() - start) * 1000)
     except Exception as e:
@@ -159,8 +249,16 @@ async def tool_glob_files(pattern: str, root: str = ".") -> ToolResult:
                           (time.time() - start) * 1000)
 
 
-async def tool_search_code(query: str, path: str = ".", max_results: int = 50) -> ToolResult:
-    """Search for a text pattern across files under *path* (case-insensitive)."""
+# Context lines shown around each search match (before + after)
+_SEARCH_CONTEXT = 2
+
+
+async def tool_search_code(query: str, path: str = ".", max_results: int = 20) -> ToolResult:
+    """
+    Search for a text pattern across source files (case-insensitive).
+    Returns each match with surrounding context lines so you can often
+    avoid a follow-up read_file call entirely.
+    """
     start = time.time()
     try:
         abs_path = os.path.abspath(path)
@@ -186,19 +284,29 @@ async def tool_search_code(query: str, path: str = ".", max_results: int = 50) -
                     fpath = os.path.join(root_dir, fname)
                     try:
                         with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                            for line_no, line in enumerate(f, 1):
-                                if pattern.search(line):
-                                    rel = os.path.relpath(fpath, abs_path)
-                                    snippet = line.strip()[:120]
-                                    results.append(f"{rel}:{line_no}: {snippet}")
-                                    if len(results) >= max_results:
-                                        return
+                            all_lines = f.readlines()
+                        for line_no, line in enumerate(all_lines, 1):
+                            if len(results) >= max_results:
+                                return
+                            if pattern.search(line):
+                                rel = os.path.relpath(fpath, abs_path)
+                                # Gather context lines around the match
+                                ctx_start = max(0, line_no - 1 - _SEARCH_CONTEXT)
+                                ctx_end   = min(len(all_lines), line_no + _SEARCH_CONTEXT)
+                                ctx_lines = []
+                                for ci in range(ctx_start, ctx_end):
+                                    marker = "►" if ci == line_no - 1 else " "
+                                    ctx_lines.append(
+                                        f"  {ci + 1:4}│{marker} {all_lines[ci].rstrip()}"
+                                    )
+                                block = f"{rel}:{line_no}\n" + "\n".join(ctx_lines)
+                                results.append(block)
                     except (OSError, UnicodeDecodeError):
                         continue
 
         await asyncio.to_thread(_search)
 
-        output = "\n".join(results) if results else f"No matches for '{query}'"
+        output = "\n\n".join(results) if results else f"No matches for '{query}'"
         if len(results) >= max_results:
             output += f"\n\n⚠️ Truncated at {max_results} results."
         return ToolResult("search_code", True, output,
@@ -257,6 +365,99 @@ async def tool_tree_view(path: str = ".", max_depth: int = 3) -> ToolResult:
                           (time.time() - start) * 1000)
 
 
+async def tool_read_symbol(symbol: str, path: str) -> ToolResult:
+    """
+    Extract a named function or class from a Python file using AST.
+    Supports 'ClassName.method_name' and 'function_name' formats.
+    More efficient than read_file with line ranges — no line numbers needed.
+    """
+    start = time.time()
+    try:
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path):
+            return ToolResult("read_symbol", False, "", f"File not found: {path}",
+                              (time.time() - start) * 1000)
+        if not path.endswith(".py"):
+            return ToolResult(
+                "read_symbol", False, "",
+                "read_symbol only supports Python (.py) files. Use read_file with start_line/end_line for other types.",
+                (time.time() - start) * 1000,
+            )
+
+        def _extract():
+            import ast as _ast
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                source = f.read()
+            lines = source.splitlines()
+            tree = _ast.parse(source)
+
+            parts = symbol.strip().split(".")
+            target_class  = parts[0] if len(parts) > 1 else None
+            target_symbol = parts[-1]
+
+            found = None
+
+            if target_class:
+                # Look for ClassName.method_name
+                for node in _ast.walk(tree):
+                    if isinstance(node, _ast.ClassDef) and node.name == target_class:
+                        for child in node.body:
+                            if isinstance(child, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                                if child.name == target_symbol:
+                                    found = child
+                                    break
+                        break
+            else:
+                # Top-level function or class
+                for node in _ast.walk(tree):
+                    if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+                        if node.name == target_symbol:
+                            found = node
+                            break
+
+            if found is None:
+                return None, None, None
+
+            sl = found.lineno
+            el = getattr(found, "end_lineno", None)
+            if el is None:
+                # Python < 3.8 fallback: read until next same-indent block
+                el = sl
+                base_indent = len(lines[sl - 1]) - len(lines[sl - 1].lstrip())
+                for i in range(sl, len(lines)):
+                    stripped = lines[i].lstrip()
+                    if stripped and i > sl - 1:
+                        indent = len(lines[i]) - len(stripped)
+                        if indent <= base_indent and not lines[i].strip().startswith("#"):
+                            break
+                    el = i + 1
+
+            return lines[sl - 1:el], sl, el
+
+        selected, sl, el = await asyncio.to_thread(_extract)
+
+        if selected is None:
+            return ToolResult(
+                "read_symbol", False, "",
+                f"Symbol '{symbol}' not found in {path}. "
+                f"Try read_file(path) first to see the file outline.",
+                (time.time() - start) * 1000,
+            )
+
+        out = "\n".join(selected)
+        return ToolResult(
+            "read_symbol", True,
+            f"[{symbol} — Lines {sl}–{el} of {path}]\n\n{out}",
+            execution_time_ms=(time.time() - start) * 1000,
+        )
+    except SyntaxError as e:
+        return ToolResult("read_symbol", False, "", f"Syntax error parsing {path}: {e}",
+                          (time.time() - start) * 1000)
+    except Exception as e:
+        return ToolResult("read_symbol", False, "", str(e),
+                          (time.time() - start) * 1000)
+
+
 # ─────────────────────────────────────────────────────────────────
 # Tool Registry
 # ─────────────────────────────────────────────────────────────────
@@ -272,12 +473,35 @@ class ToolRegistry:
         """Register the built-in read-only tools."""
         self.register(ToolDefinition(
             name="read_file",
-            description="Read the contents of a file. Returns the full text of the file.",
+            description=(
+                "Read the contents of a file. "
+                f"Files over {OUTLINE_THRESHOLD} lines return an [OUTLINE] with line numbers instead of full content — "
+                "you MUST then call read_file again with start_line and end_line, or use read_symbol. "
+                "Use start_line/end_line to read a specific section directly. "
+                "For Python symbols, prefer read_symbol over line ranges."
+            ),
             parameters={
-                "path": {"type": "string", "description": "Path to the file to read (relative or absolute)"}
+                "path":       {"type": "string",  "description": "Path to the file (relative or absolute)"},
+                "start_line": {"type": "integer", "description": "First line to read, 1-indexed inclusive. Optional.", "default": None},
+                "end_line":   {"type": "integer", "description": "Last line to read, 1-indexed inclusive. Optional.",  "default": None},
             },
             requires_approval=False,
             execute=lambda **kw: tool_read_file(**kw),
+        ))
+        self.register(ToolDefinition(
+            name="read_symbol",
+            description=(
+                "Extract a named function or class from a Python file by symbol name. "
+                "More efficient than read_file with line ranges — no line numbers needed. "
+                "Supports 'ClassName.method_name' and bare 'function_name'. "
+                "Python files only."
+            ),
+            parameters={
+                "symbol": {"type": "string", "description": "Symbol to extract, e.g. 'Executor.ask_ai' or 'tool_read_file'"},
+                "path":   {"type": "string", "description": "Path to the Python file"},
+            },
+            requires_approval=False,
+            execute=lambda **kw: tool_read_symbol(**kw),
         ))
         self.register(ToolDefinition(
             name="list_dir",
@@ -301,10 +525,15 @@ class ToolRegistry:
         ))
         self.register(ToolDefinition(
             name="search_code",
-            description="Search for a text pattern across source files (case-insensitive). Returns matching lines with file:line format.",
+            description=(
+                "Search for a text pattern across source files (case-insensitive). "
+                "Returns each match with surrounding context lines — often enough to answer "
+                "without a follow-up read_file call. ALWAYS use this before read_file "
+                "to locate the relevant section."
+            ),
             parameters={
-                "query": {"type": "string", "description": "Text to search for"},
-                "path": {"type": "string", "description": "Directory to search in. Default: '.'", "default": "."},
+                "query": {"type": "string", "description": "Text or identifier to search for"},
+                "path":  {"type": "string", "description": "Directory to search in. Default: '.'", "default": "."},
             },
             requires_approval=False,
             execute=lambda **kw: tool_search_code(**kw),
