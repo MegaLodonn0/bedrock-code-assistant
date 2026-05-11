@@ -361,20 +361,20 @@ self.register(ToolDefinition(
 ## Uygulama Sırası
 
 ```
-Aşama 1a  →  read_file'a start_line/end_line ekle          (tools.py)
-Aşama 1b  →  OUTLINE_THRESHOLD kontrolü ekle               (tools.py)
-Aşama 1c  →  _build_outline() fonksiyonunu yaz             (tools.py)
-Aşama 1d  →  ToolRegistry kaydını güncelle                 (tools.py)
+[x] Aşama 1a  →  read_file'a start_line/end_line ekle          (tools.py)
+[x] Aşama 1b  →  OUTLINE_THRESHOLD kontrolü ekle               (tools.py)
+[x] Aşama 1c  →  _build_outline() fonksiyonunu yaz             (tools.py)
+[x] Aşama 1d  →  ToolRegistry kaydını güncelle                 (tools.py)
 ──────────────────────────────────────────────────────────
-Aşama 2   →  search_code'a bağlam satırları ekle           (tools.py)
+[x] Aşama 2   →  search_code'a bağlam satırları ekle           (tools.py)
 ──────────────────────────────────────────────────────────
-Aşama 3   →  System prompt kurallarını güncelle            (prompts.py)
+[x] Aşama 3   →  System prompt kurallarını güncelle            (prompts.py)
 ──────────────────────────────────────────────────────────
-Aşama 4   →  read_symbol aracını ekle (opsiyonel)          (tools.py)
+[x] Aşama 4   →  read_symbol aracını ekle                      (tools.py)
 ```
 
-Her aşama bağımsız olarak çalışır ve test edilebilir.  
-Aşama 1+2+3 birlikte yapılması önerilir — birbirini tamamlar.
+> **Tüm aşamalar tamamlandı.** `main` branch commit: `27b45f8`
+
 
 ---
 
